@@ -8,7 +8,8 @@ import { ExamPackage, ExamAssignmentInfo } from './types/curriculum';
 import { 
   Home, LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
   Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, 
-  UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, CheckCircle2
+  UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, CheckCircle2,
+  Lock, KeyRound, AlertCircle
 } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
@@ -77,9 +78,34 @@ const DEFAULT_BRANDING = {
   bannerUrl: PRESET_BANNERS[0].url
 };
 
+// Mã PIN mặc định cho Giáo viên nếu chưa đổi
+const DEFAULT_TEACHER_PIN = '123456';
+
 export default function App() {
-  const [appMode, setAppMode] = useState<'home' | 'student' | 'teacher' | 'print'>('home');
+  // 1. Phân quyền URL tự động: Nếu vào qua link/QR có mode=student hoặc exam/code thì lập tức vào màn hình học sinh
+  const [appMode, setAppMode] = useState<'home' | 'student' | 'teacher' | 'print'>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('mode') === 'student' || params.get('role') === 'student' || params.get('exam') || params.get('code') || params.get('assign')) {
+        return 'student';
+      }
+    }
+    return 'home';
+  });
+
   const [activePrintMode, setActivePrintMode] = useState<'exam_only' | 'exam_with_solutions' | 'matrix'>('exam_only');
+
+  // Trạng thái xác thực mã PIN Giáo viên
+  const [isTeacherAuthenticated, setIsTeacherAuthenticated] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('physixam_teacher_auth') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [isPinModalOpen, setIsPinModalOpen] = useState<boolean>(false);
+  const [enteredPin, setEnteredPin] = useState<string>('');
+  const [pinError, setPinError] = useState<string | null>(null);
 
   const [branding, setBranding] = useState(() => {
     try {
@@ -171,6 +197,17 @@ export default function App() {
     maxViolations: 5
   } as any);
 
+  // Đọc tham số URL khi tải trang để định tuyến an toàn
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const targetCode = params.get('code') || params.get('variant');
+      if (targetCode) {
+        handleSelectExamCode(targetCode);
+      }
+    } catch (e) {}
+  }, []);
+
   useEffect(() => {
     const fetchSubmissionsFromMongo = async () => {
       try {
@@ -216,6 +253,33 @@ export default function App() {
     }, 1000);
     return () => clearInterval(timer);
   }, [studentExamPhase, appMode]);
+
+  // HÀM BẢO MẬT: BẤM VÀO GIÁO VIÊN -> BẮT BUỘC NHẬP MÃ PIN NẾU CHƯA XÁC THỰC
+  const handleRequestTeacherMode = () => {
+    if (isTeacherAuthenticated) {
+      setAppMode('teacher');
+    } else {
+      setEnteredPin('');
+      setPinError(null);
+      setIsPinModalOpen(true);
+    }
+  };
+
+  const handleVerifyTeacherPin = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const savedPin = localStorage.getItem('physixam_teacher_pin') || DEFAULT_TEACHER_PIN;
+    if (enteredPin === savedPin) {
+      setIsTeacherAuthenticated(true);
+      try {
+        sessionStorage.setItem('physixam_teacher_auth', 'true');
+      } catch {}
+      setIsPinModalOpen(false);
+      setPinError(null);
+      setAppMode('teacher');
+    } else {
+      setPinError('Mã PIN bảo mật không chính xác. Vui lòng kiểm tra lại!');
+    }
+  };
 
   const handleSaveBranding = () => {
     setBranding(brandingDraft);
@@ -562,16 +626,18 @@ export default function App() {
                 <span>Trang chủ</span>
               </button>
 
+              {/* Nút Giáo viên - Đã kích hoạt bảo mật Mã PIN */}
               <button
                 type="button"
-                onClick={() => setAppMode('teacher')}
+                onClick={handleRequestTeacherMode}
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
                   appMode === 'teacher'
                     ? 'bg-indigo-600 text-white shadow-md'
                     : 'text-slate-400 hover:text-white'
                 }`}
+                title={isTeacherAuthenticated ? 'Bảng điều khiển Giáo viên' : 'Yêu cầu Mã PIN để truy cập'}
               >
-                <LayoutDashboard className="w-3.5 h-3.5" />
+                {isTeacherAuthenticated ? <LayoutDashboard className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
                 <span>Giáo viên</span>
               </button>
 
@@ -593,12 +659,12 @@ export default function App() {
       </header>
 
       {/* ========================================================================= */}
-      {/* CHẾ ĐỘ 1: CỔNG THÔNG TIN TRANG CHỦ (PANO ĐÃ ĐIỀU CHỈNH GỌN 2/3)           */}
+      {/* CHẾ ĐỘ 1: CỔNG THÔNG TIN TRANG CHỦ                                        */}
       {/* ========================================================================= */}
       {appMode === 'home' && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 space-y-6 animate-in fade-in duration-300">
           
-          {/* PANO BANNER HERO CARD THU GỌN 2/3 (CHIỀU CAO ~260px - 290px) */}
+          {/* PANO BANNER HERO CARD THU GỌN 2/3 */}
           <section className="relative rounded-3xl overflow-hidden shadow-xl border border-indigo-900/40 bg-slate-950 min-h-[250px] sm:min-h-[290px] flex items-center">
             
             <div 
@@ -636,10 +702,10 @@ export default function App() {
 
                 <button
                   type="button"
-                  onClick={() => setAppMode('teacher')}
+                  onClick={handleRequestTeacherMode}
                   className="px-5 py-2.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white font-black text-xs sm:text-sm shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-2 backdrop-blur-md cursor-pointer hover:scale-[1.02] active:scale-[0.98] border border-indigo-400/30"
                 >
-                  <LayoutDashboard className="w-4 h-4" />
+                  <Lock className="w-4 h-4 text-amber-400" />
                   <span>Bảng Điều Khiển Giáo Viên</span>
                 </button>
 
@@ -683,22 +749,25 @@ export default function App() {
             </div>
 
             <div 
-              onClick={() => setAppMode('teacher')}
+              onClick={handleRequestTeacherMode}
               className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200/90 shadow-sm hover:shadow-xl transition-all cursor-pointer hover:-translate-y-1 space-y-3.5 group relative overflow-hidden"
             >
               <div className="w-11 h-11 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black group-hover:scale-110 transition shadow-xs border border-indigo-100">
-                <LayoutDashboard className="w-5 h-5" />
+                <Lock className="w-5 h-5 text-amber-500" />
               </div>
               <div>
-                <h3 className="font-black text-base text-slate-900 group-hover:text-indigo-600 transition">
-                  Hệ Thống Quản Trị Giáo Viên
-                </h3>
+                <div className="flex items-center gap-1.5 mb-0.5">
+                  <h3 className="font-black text-base text-slate-900 group-hover:text-indigo-600 transition">
+                    Hệ Thống Quản Trị Giáo Viên
+                  </h3>
+                  <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-3xs font-bold rounded">Bảo mật PIN</span>
+                </div>
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                   Trọn bộ 6 Panel: Ngân hàng đề GDPT 2018, bóc tách Word, trộn đề, in ấn chuẩn A4 và đồng bộ dữ liệu MongoDB Atlas.
                 </p>
               </div>
               <div className="flex items-center gap-1.5 text-xs font-black text-indigo-600 pt-1">
-                <span>Mở bảng điều khiển 6 Panel</span>
+                <span>Mở bảng điều khiển (Cần PIN)</span>
                 <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition" />
               </div>
             </div>
@@ -787,14 +856,14 @@ export default function App() {
                   setStudentExamPhase('launch');
                   setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
                 }}
-                onOpenTeacherMode={() => setAppMode('teacher')}
+                onOpenTeacherMode={handleRequestTeacherMode}
                 onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
               />
             )}
           </div>
         )}
 
-        {/* CHẾ ĐỘ 3: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
+        {/* CHẾ ĐỘ 3: BẢNG ĐIỀU KHIỂN GIÁO VIÊN (ĐÃ QUA XÁC THỰC MÃ PIN) */}
         {appMode === 'teacher' && (
           <TeacherDashboard
             exam={safeCurrentExam}
@@ -828,7 +897,7 @@ export default function App() {
             <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
               <button
                 type="button"
-                onClick={() => setAppMode('teacher')}
+                onClick={handleRequestTeacherMode}
                 className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs cursor-pointer"
               >
                 <ArrowLeft className="w-4 h-4" />
@@ -938,6 +1007,64 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* MODAL NHẬP MÃ PIN BẢO MẬT GIÁO VIÊN */}
+      {isPinModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 print:hidden animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-5">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto shadow-inner border border-amber-200">
+              <KeyRound className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h3 className="font-black text-slate-900 text-lg">Xác Thực Quyền Giáo Viên</h3>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Khu vực quản trị chỉ dành cho Giáo viên. Vui lòng nhập mã PIN bảo mật để tiếp tục.
+              </p>
+            </div>
+
+            <form onSubmit={handleVerifyTeacherPin} className="space-y-4">
+              <div>
+                <input
+                  type="password"
+                  autoFocus
+                  maxLength={10}
+                  value={enteredPin}
+                  onChange={(e) => {
+                    setEnteredPin(e.target.value);
+                    setPinError(null);
+                  }}
+                  placeholder="Nhập mã PIN (Mặc định: 123456)"
+                  className="w-full px-4 py-3 text-center tracking-widest text-lg font-black rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none transition"
+                />
+              </div>
+
+              {pinError && (
+                <div className="flex items-center gap-1.5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold text-left">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{pinError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsPinModalOpen(false)}
+                  className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer transition"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/30 cursor-pointer transition"
+                >
+                  Xác nhận
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* MODAL CÀI ĐẶT PANO BANNER & LOGO */}
       {isBrandingModalOpen && (
