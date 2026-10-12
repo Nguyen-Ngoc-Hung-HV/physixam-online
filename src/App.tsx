@@ -5,7 +5,7 @@ import { ExamResults, PrintMode } from './components/ExamResults';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { safeStorage } from './utils/safeStorage';
 import { ExamPackage, ExamAssignmentInfo } from './types/curriculum';
-import { LayoutDashboard, GraduationCap, Code, Copy, Check, X } from 'lucide-react';
+import { LayoutDashboard, GraduationCap, Code, Copy, Check, X, Printer, ArrowLeft } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
   id: 'exam-101',
@@ -48,7 +48,8 @@ const DEFAULT_EXAM: Exam = {
 } as any;
 
 export default function App() {
-  const [appMode, setAppMode] = useState<'student' | 'teacher'>('teacher');
+  const [appMode, setAppMode] = useState<'student' | 'teacher' | 'print'>('teacher');
+  const [activePrintMode, setActivePrintMode] = useState<'exam_only' | 'exam_with_solutions' | 'matrix'>('exam_only');
 
   const [exam, setExam] = useState<Exam>(() => {
     try {
@@ -76,7 +77,6 @@ export default function App() {
 
   const [activeCode, setActiveCode] = useState<string>(() => exam?.code || '101');
 
-  // Lọc an toàn mảng string[], loại bỏ triệt để undefined
   const availableCodes: string[] = React.useMemo(() => {
     if (bundle && Array.isArray(bundle.variants) && bundle.variants.length > 0) {
       const codes = bundle.variants
@@ -151,7 +151,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [studentExamPhase, appMode]);
 
-  // Luồng áp dụng gói mã đề trộn với ép kiểu an toàn
   const handleApplyBundle = (newBundle: ExamVariantBundle) => {
     if (!newBundle || !Array.isArray(newBundle.variants) || newBundle.variants.length === 0) return;
     setBundle(newBundle);
@@ -167,7 +166,6 @@ export default function App() {
       console.warn('Lỗi lưu gói mã đề trộn:', e);
     }
 
-    // Biến thể đầu tiên có thể là chính variant hoặc variant.examData
     const firstVariant: any = newBundle.variants[0];
     const targetExam: Exam = firstVariant?.examData || firstVariant;
     if (targetExam && Array.isArray((targetExam as any).questions)) {
@@ -176,7 +174,6 @@ export default function App() {
     }
   };
 
-  // Luồng chuyển đổi mã đề thi
   const handleSelectExamCode = (code: string) => {
     if (!code) return;
     setActiveCode(code);
@@ -435,15 +432,32 @@ export default function App() {
     }
   };
 
-  const handleOpenPrint = (printMode: PrintMode) => {
-    window.print();
+  // KHÔI PHỤC HOÀN CHỈNH TÍNH NĂNG 5: IN ẤN & XUẤT BẢN PDF
+  const handleOpenPrint = (mode: 'exam_only' | 'exam_with_solutions') => {
+    setActivePrintMode(mode);
+    setAppMode('print');
+    setTimeout(() => {
+      window.print();
+    }, 300);
+  };
+
+  const handleOpenPrintMatrix = (targetBundle: ExamVariantBundle) => {
+    if (targetBundle) {
+      setBundle(targetBundle);
+    }
+    setActivePrintMode('matrix');
+    setAppMode('print');
+    setTimeout(() => {
+      window.print();
+    }, 300);
   };
 
   const safeCurrentExam = (exam && Array.isArray(exam.questions) && exam.questions.length > 0) ? exam : DEFAULT_EXAM;
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased">
-      <nav className="bg-slate-900 border-b border-slate-800 text-white px-4 py-2.5 sticky top-0 z-40 shadow-md">
+      {/* THANH ĐIỀU HƯỚNG TẦNG ĐẦU */}
+      <nav className="bg-slate-900 border-b border-slate-800 text-white px-4 py-2.5 sticky top-0 z-40 shadow-md print:hidden">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center font-black text-sm">
@@ -485,7 +499,8 @@ export default function App() {
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-4 py-6 pb-16">
+      <main className="max-w-7xl mx-auto px-4 py-6 pb-16 print:p-0 print:m-0 print:max-w-none">
+        {/* CHẾ ĐỘ 1: HỌC SINH LÀM BÀI / KẾT QUẢ */}
         {appMode === 'student' && (
           <div>
             {studentExamPhase === 'launch' && (
@@ -519,12 +534,13 @@ export default function App() {
                   setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
                 }}
                 onOpenTeacherMode={() => setAppMode('teacher')}
-                onOpenPrint={(printMode) => handleOpenPrint(printMode as any)}
+                onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
               />
             )}
           </div>
         )}
 
+        {/* CHẾ ĐỘ 2: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
         {appMode === 'teacher' && (
           <TeacherDashboard
             exam={safeCurrentExam}
@@ -544,15 +560,137 @@ export default function App() {
             assignments={assignments}
             onAssignExam={handleAssignExam}
             onDeleteAssignment={handleDeleteAssignment}
-            onOpenPrint={() => handleOpenPrint('exam_only' as any)}
+            onOpenPrint={handleOpenPrint}
+            onOpenPrintMatrix={handleOpenPrintMatrix}
             onOpenTeacherJsonModal={handleOpenJsonModal}
             onPreviewAsStudent={() => setAppMode('student')}
           />
         )}
+
+        {/* CHẾ ĐỘ 3: KHUNG XEM TRƯỚC VÀ IN ĐỀ THI / MA TRẬN ĐÁP ÁN (TÍNH NĂNG 5) */}
+        {appMode === 'print' && (
+          <div className="bg-white p-6 sm:p-10 rounded-3xl shadow-sm border border-slate-200 print:border-none print:shadow-none print:p-0">
+            {/* Thanh công cụ khi xem trước in (ẩn khi in giấy thực tế) */}
+            <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
+              <button
+                type="button"
+                onClick={() => setAppMode('teacher')}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Quay lại Bảng điều khiển</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-500 mr-2">
+                  Chế độ: {activePrintMode === 'exam_only' ? 'Đề thi chuẩn A4' : activePrintMode === 'exam_with_solutions' ? 'Đề thi kèm Lời giải' : 'Ma trận đáp án các mã đề'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Xác nhận In ngay (Print)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Khung nội dung in chuẩn A4 */}
+            {activePrintMode === 'matrix' ? (
+              <div className="space-y-6">
+                <div className="text-center pb-4 border-b">
+                  <h2 className="text-lg font-black uppercase tracking-wider">BẢNG MA TRẬN ĐÁP ÁN CÁC MÃ ĐỀ TRỘN</h2>
+                  <p className="text-xs text-slate-600 mt-1">{safeCurrentExam.title} • Thời gian: {safeCurrentExam.durationMinutes || 45} phút</p>
+                </div>
+                {bundle && Array.isArray(bundle.variants) ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-center border-collapse border border-slate-300">
+                      <thead>
+                        <tr className="bg-slate-100 font-bold">
+                          <th className="border border-slate-300 p-2">Câu hỏi</th>
+                          {bundle.variants.map((v: any) => (
+                            <th key={v.code} className="border border-slate-300 p-2">Mã {v.code}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {safeCurrentExam.questions.map((q: any, idx: number) => (
+                          <tr key={q.id || idx} className="hover:bg-slate-50">
+                            <td className="border border-slate-300 p-2 font-bold">Câu {idx + 1}</td>
+                            {bundle.variants.map((v: any) => {
+                              const varQ = (v.examData || v).questions?.[idx];
+                              return (
+                                <td key={v.code} className="border border-slate-300 p-2 font-mono font-bold text-indigo-700">
+                                  {varQ?.correctAnswer || '-'}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="text-center text-slate-500 py-6">Chưa có gói mã đề trộn. Vui lòng vào Panel 3 thực hiện trộn đề trước.</p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Header chuẩn bài thi của Bộ GD&ĐT */}
+                <div className="flex justify-between items-start pb-4 border-b-2 border-slate-900">
+                  <div className="text-center">
+                    <p className="text-xs uppercase font-bold">SỞ GIÁO DỤC VÀ ĐÀO TẠO</p>
+                    <p className="text-sm uppercase font-black">TRƯỜNG THPT CHUYÊN</p>
+                    <p className="text-3xs italic">(Đề thi gồm {safeCurrentExam.questions.length} câu)</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-black uppercase">{safeCurrentExam.title}</p>
+                    <p className="text-xs font-semibold">NĂM HỌC 2025 - 2026 • MÔN: VẬT LÍ</p>
+                    <p className="text-xs">Thời gian làm bài: {safeCurrentExam.durationMinutes || 45} phút</p>
+                  </div>
+                  <div className="border border-slate-800 px-3 py-1 rounded text-center">
+                    <p className="text-3xs font-bold uppercase">MÃ ĐỀ THI</p>
+                    <p className="text-base font-black font-mono">{activeCode}</p>
+                  </div>
+                </div>
+
+                {/* Danh sách câu hỏi in */}
+                <div className="space-y-5 pt-2">
+                  {safeCurrentExam.questions.map((q: any, idx: number) => (
+                    <div key={q.id || idx} className="space-y-2 text-sm leading-relaxed">
+                      <p className="font-semibold text-slate-900">
+                        <span className="font-black text-indigo-900">Câu {idx + 1}: </span>
+                        {q.prompt || q.stem || ''}
+                      </p>
+                      {Array.isArray(q.options) && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 pl-4 text-xs font-medium">
+                          {q.options.map((opt: any) => (
+                            <div key={opt.id || opt.label} className="flex items-center gap-1.5">
+                              <span className="font-bold">{opt.label}.</span>
+                              <span>{opt.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {activePrintMode === 'exam_with_solutions' && q.explanation && (
+                        <div className="mt-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs italic text-slate-700">
+                          <span className="font-bold text-emerald-700 not-italic">Hướng dẫn giải: </span>
+                          {q.explanation}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
+      {/* MODAL QUẢN LÝ JSON */}
       {isJsonModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
           <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
             <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -569,7 +707,7 @@ export default function App() {
 
             <div className="p-4 flex-1 overflow-hidden flex flex-col gap-3">
               <div className="flex items-center justify-between text-xs text-slate-500">
-                <span>Thầy có thể sao chép, lưu trữ hoặc dán cấu trúc JSON mới để cập nhật đề thi:</span>
+                <span>Thầy có thể sao chép hoặc dán cấu trúc JSON mới để cập nhật đề thi:</span>
                 <button
                   type="button"
                   onClick={handleCopyJson}
