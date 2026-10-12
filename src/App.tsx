@@ -4,6 +4,7 @@ import { StudentExamLaunch } from './components/StudentExamLaunch';
 import { ExamResults, PrintMode } from './components/ExamResults';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { safeStorage } from './utils/safeStorage';
+import { ExamPackage } from './types/curriculum';
 
 const DEFAULT_EXAM: Exam = {
   id: 'exam-101',
@@ -56,10 +57,12 @@ export default function App() {
         }
       }
     } catch (e) {
-      console.warn("Lỗi đọc cache đề thi, tự động nạp đề chuẩn:", e);
+      console.warn("Lỗi đọc cache đề thi, nạp đề mặc định:", e);
     }
     return DEFAULT_EXAM;
   });
+
+  const [activeCode, setActiveCode] = useState<string>(() => exam?.code || '101');
 
   const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
     try {
@@ -87,6 +90,16 @@ export default function App() {
     maxViolations: 5
   } as any);
 
+  // Cập nhật lại thời gian làm bài khi đề thi thay đổi
+  useEffect(() => {
+    if (exam?.durationMinutes) {
+      setTimeRemainingSeconds(exam.durationMinutes * 60);
+    }
+    if (exam?.code) {
+      setActiveCode(exam.code);
+    }
+  }, [exam]);
+
   useEffect(() => {
     if (studentExamPhase !== 'launch') return;
     const timer = setInterval(() => {
@@ -101,6 +114,49 @@ export default function App() {
     }, 1000);
     return () => clearInterval(timer);
   }, [studentExamPhase]);
+
+  // LUỒNG NẠP ĐỀ TỪ NGÂN HÀNG HOÀN CHỈNH
+  const handleLoadExamFromBank = (selectedPkg: ExamPackage) => {
+    if (!selectedPkg || !selectedPkg.examData) return;
+    const targetExam = selectedPkg.examData;
+    
+    // 1. Cập nhật đề thi hiện hành
+    setExam(targetExam);
+    setActiveCode(targetExam.code || selectedPkg.code || '101');
+    
+    // 2. Lưu vào storage để duy trì phiên làm việc
+    try {
+      const serialized = JSON.stringify(targetExam);
+      if (safeStorage?.setItem) {
+        safeStorage.setItem('physixam_current_exam', serialized);
+      } else {
+        localStorage.setItem('physixam_current_exam', serialized);
+      }
+    } catch (e) {
+      console.warn('Lỗi lưu đề nạp từ ngân hàng:', e);
+    }
+
+    // 3. Reset trạng thái bài làm của học sinh theo đề mới
+    setAnswers({});
+    setFlaggedQuestionIds(new Set());
+    setCurrentQuestionIndex(0);
+    setTimeRemainingSeconds((targetExam.durationMinutes || 45) * 60);
+    setStudentExamPhase('launch');
+  };
+
+  const handleUpdateExamDirectly = (updatedExam: Exam) => {
+    if (!updatedExam) return;
+    setExam(updatedExam);
+    if (updatedExam.code) setActiveCode(updatedExam.code);
+    try {
+      const serialized = JSON.stringify(updatedExam);
+      if (safeStorage?.setItem) {
+        safeStorage.setItem('physixam_current_exam', serialized);
+      } else {
+        localStorage.setItem('physixam_current_exam', serialized);
+      }
+    } catch (e) {}
+  };
 
   const handleAnswerChange = (questionId: string, answer: any) => {
     if (!questionId) return;
@@ -250,7 +306,6 @@ export default function App() {
     window.print();
   };
 
-  // Đảm bảo exam luôn luôn có questions hợp lệ
   const safeCurrentExam = (exam && Array.isArray(exam.questions) && exam.questions.length > 0) ? exam : DEFAULT_EXAM;
 
   return (
@@ -284,28 +339,35 @@ export default function App() {
             onRetake={() => {
               setAnswers({});
               setStudentExamPhase('launch');
-              setTimeRemainingSeconds(45 * 60);
+              setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
             }}
             onOpenTeacherMode={() => {}}
             onOpenPrint={(printMode) => handleOpenPrint(printMode as any)}
           />
         )}
 
-        {React.createElement(TeacherDashboard as any, {
-          submissions: submissions || [],
-          onDeleteSubmission: handleDeleteSubmission,
-          onClearSubmissions: handleClearSubmissions,
-          currentExam: safeCurrentExam,
-          onUpdateExam: (newExam: any) => {
-            const valid = (newExam && Array.isArray(newExam.questions)) ? newExam : DEFAULT_EXAM;
-            setExam(valid);
-            try {
-              safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', JSON.stringify(valid)) : localStorage.setItem('physixam_current_exam', JSON.stringify(valid));
-            } catch (e) {}
-          },
-          antiCheatConfig: antiCheatConfig,
-          onChangeAntiCheatConfig: setAntiCheatConfig
-        })}
+        {/* Bảng điều khiển Giáo viên - Nối trọn vẹn luồng nạp đề từ Ngân hàng */}
+        <TeacherDashboard
+          exam={safeCurrentExam}
+          currentExam={safeCurrentExam}
+          activeCode={activeCode}
+          onSelectExamCode={setActiveCode}
+          onSelectExamPackage={handleLoadExamFromBank}
+          onUpdateExam={handleUpdateExamDirectly}
+          submissions={submissions || []}
+          onDeleteSubmission={handleDeleteSubmission}
+          onClearSubmissions={handleClearSubmissions}
+          antiCheatConfig={antiCheatConfig}
+          onChangeAntiCheatConfig={setAntiCheatConfig}
+          bundle={null}
+          onApplyBundle={() => {}}
+          onOpenPrint={() => handleOpenPrint('exam_only' as any)}
+          onOpenTeacherJsonModal={() => {}}
+          onPreviewAsStudent={() => {
+            setStudentExamPhase('launch');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
       </main>
     </div>
   );
