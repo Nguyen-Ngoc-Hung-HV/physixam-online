@@ -5,7 +5,7 @@ import { ExamResults, PrintMode } from './components/ExamResults';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { safeStorage } from './utils/safeStorage';
 
-const DEFAULT_EXAM: any = {
+const DEFAULT_EXAM: Exam = {
   id: 'exam-101',
   code: '101',
   title: 'Khảo thí Vật lí 10 - Ôn tập Chuyển động thẳng',
@@ -43,25 +43,27 @@ const DEFAULT_EXAM: any = {
       points: 2.5
     }
   ]
-};
+} as any;
 
 export default function App() {
   const [exam, setExam] = useState<Exam>(() => {
     try {
-      const saved = safeStorage.getItem('physixam_current_exam');
+      const saved = safeStorage?.getItem ? safeStorage.getItem('physixam_current_exam') : localStorage.getItem('physixam_current_exam');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
           return parsed;
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Lỗi đọc cache đề thi, tự động nạp đề chuẩn:", e);
+    }
     return DEFAULT_EXAM;
   });
 
   const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
     try {
-      const saved = safeStorage.getItem('physixam_submissions');
+      const saved = safeStorage?.getItem ? safeStorage.getItem('physixam_submissions') : localStorage.getItem('physixam_submissions');
       return saved ? JSON.parse(saved) : [];
     } catch (e) {
       return [];
@@ -101,10 +103,12 @@ export default function App() {
   }, [studentExamPhase]);
 
   const handleAnswerChange = (questionId: string, answer: any) => {
-    setAnswers((prev) => ({ ...prev, [questionId]: answer }));
+    if (!questionId) return;
+    setAnswers((prev) => ({ ...(prev || {}), [questionId]: answer }));
   };
 
   const handleToggleFlag = (questionId: string) => {
+    if (!questionId) return;
     setFlaggedQuestionIds((prev) => {
       const next = new Set(prev);
       if (next.has(questionId)) {
@@ -119,17 +123,18 @@ export default function App() {
   const handleRecordViolation = (event: ViolationEvent) => {
     setAuditLog((prev) => ({
       ...prev,
-      violations: [...prev.violations, event]
+      violations: [...(prev?.violations || []), event]
     }));
   };
 
   const handleSubmitExam = () => {
     let score = 0;
     const detailedFeedback: any[] = [];
-    const questionsList = exam?.questions || [];
+    const questionsList = (exam && Array.isArray(exam.questions)) ? exam.questions : (DEFAULT_EXAM.questions || []);
 
     questionsList.forEach((q: any) => {
-      const userAns = answers[q.id];
+      if (!q || !q.id) return;
+      const userAns = (answers && answers[q.id]) !== undefined ? answers[q.id] : undefined;
       let isCorrect = false;
       let pointsAwarded = 0;
       const qPoints = q.points || (10 / (questionsList.length || 1));
@@ -177,23 +182,28 @@ export default function App() {
 
     setEvaluation(evalResult);
 
+    const safeExamCode = exam?.code || '101';
     const newSub: StudentSubmission = {
       id: `sub-${Date.now()}`,
       candidateName: candidateInfo.name,
       studentClass: candidateInfo.studentClass,
       candidateNumber: candidateInfo.candidateNumber,
-      examCode: exam.code || '101',
+      examCode: safeExamCode,
       score: finalScore,
       submittedAt: new Date().toISOString(),
-      answers,
+      answers: answers || {},
       auditLog,
       evaluation: evalResult
     } as any;
 
     setSubmissions((prev) => {
-      const updated = [newSub, ...prev];
+      const updated = [newSub, ...(prev || [])];
       try {
-        safeStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        if (safeStorage?.setItem) {
+          safeStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        } else {
+          localStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        }
       } catch (e) {}
       return updated;
     });
@@ -203,9 +213,9 @@ export default function App() {
 
   const handleDeleteSubmission = async (submissionId: string) => {
     setSubmissions((prev: any[]) => {
-      const updated = prev.filter((s: any) => String(s.id || s._id) !== String(submissionId));
+      const updated = (prev || []).filter((s: any) => String(s.id || s._id) !== String(submissionId));
       try {
-        safeStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        safeStorage?.setItem ? safeStorage.setItem('physixam_submissions', JSON.stringify(updated)) : localStorage.setItem('physixam_submissions', JSON.stringify(updated));
       } catch (e) {}
       return updated;
     });
@@ -223,7 +233,7 @@ export default function App() {
   const handleClearSubmissions = async () => {
     setSubmissions([]);
     try {
-      safeStorage.setItem('physixam_submissions', JSON.stringify([]));
+      safeStorage?.setItem ? safeStorage.setItem('physixam_submissions', JSON.stringify([])) : localStorage.setItem('physixam_submissions', JSON.stringify([]));
     } catch (e) {}
 
     try {
@@ -240,26 +250,21 @@ export default function App() {
     window.print();
   };
 
-  if (!exam || !exam.questions || exam.questions.length === 0) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-600 font-medium">
-        Đang khởi tạo dữ liệu đề thi...
-      </div>
-    );
-  }
+  // Đảm bảo exam luôn luôn có questions hợp lệ
+  const safeCurrentExam = (exam && Array.isArray(exam.questions) && exam.questions.length > 0) ? exam : DEFAULT_EXAM;
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased">
       <main className="pb-12">
         {studentExamPhase === 'launch' && (
           <StudentExamLaunch
-            exam={exam}
+            exam={safeCurrentExam}
             antiCheatConfig={antiCheatConfig}
             candidateInfo={candidateInfo}
             timeRemainingSeconds={timeRemainingSeconds}
             onAnswerChange={handleAnswerChange}
-            answers={answers}
-            flaggedQuestionIds={flaggedQuestionIds}
+            answers={answers || {}}
+            flaggedQuestionIds={flaggedQuestionIds || new Set()}
             onToggleFlag={handleToggleFlag}
             currentQuestionIndex={currentQuestionIndex}
             onSelectQuestion={setCurrentQuestionIndex}
@@ -270,8 +275,8 @@ export default function App() {
 
         {studentExamPhase === 'student_results' && evaluation && (
           <ExamResults
-            exam={exam}
-            answers={answers}
+            exam={safeCurrentExam}
+            answers={answers || {}}
             evaluation={evaluation}
             candidateInfo={candidateInfo}
             timeRemainingSeconds={timeRemainingSeconds}
@@ -287,14 +292,15 @@ export default function App() {
         )}
 
         {React.createElement(TeacherDashboard as any, {
-          submissions: submissions,
+          submissions: submissions || [],
           onDeleteSubmission: handleDeleteSubmission,
           onClearSubmissions: handleClearSubmissions,
-          currentExam: exam,
+          currentExam: safeCurrentExam,
           onUpdateExam: (newExam: any) => {
-            setExam(newExam);
+            const valid = (newExam && Array.isArray(newExam.questions)) ? newExam : DEFAULT_EXAM;
+            setExam(valid);
             try {
-              safeStorage.setItem('physixam_current_exam', JSON.stringify(newExam));
+              safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', JSON.stringify(valid)) : localStorage.setItem('physixam_current_exam', JSON.stringify(valid));
             } catch (e) {}
           },
           antiCheatConfig: antiCheatConfig,

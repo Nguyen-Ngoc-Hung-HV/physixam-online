@@ -29,17 +29,17 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
   timeRemainingSeconds,
   onAnswerChange,
   answers = {},
-  flaggedQuestionIds,
+  flaggedQuestionIds = new Set(),
   onToggleFlag,
-  currentQuestionIndex,
+  currentQuestionIndex = 0,
   onSelectQuestion,
   onSubmitExam,
   onRecordViolation
 }) => {
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
 
-  // Danh sách câu hỏi an toàn, tránh văng lỗi e.questions khi exam chưa khởi tạo
-  const questions = exam?.questions || [];
+  // Danh sách câu hỏi an toàn tuyệt đối, chống lỗi e.questions
+  const questions = (exam && Array.isArray(exam.questions)) ? exam.questions : [];
 
   // Lắng nghe hành vi gian lận (rời tab, chuyển cửa sổ)
   useEffect(() => {
@@ -90,7 +90,7 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
   }
 
   // Đảm bảo chỉ mục câu hỏi luôn hợp lệ
-  const safeIndex = Math.min(Math.max(0, currentQuestionIndex), questions.length - 1);
+  const safeIndex = Math.min(Math.max(0, currentQuestionIndex), Math.max(0, questions.length - 1));
   const currentQuestion = questions[safeIndex];
 
   // Định dạng thời gian đếm ngược (MM:SS)
@@ -100,9 +100,10 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Đếm số lượng câu đã trả lời
+  // Đếm số lượng câu đã trả lời an toàn
   const answeredCount = questions.filter((q) => {
-    const ans = answers[q.id];
+    if (!q || !q.id) return false;
+    const ans = (answers && answers[q.id]) !== undefined ? answers[q.id] : undefined;
     if (ans === undefined || ans === null) return false;
     if (typeof ans === 'object') {
       return Object.keys(ans).length > 0;
@@ -117,14 +118,14 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
-              Mã đề: {exam.code || '101'}
+              Mã đề: {exam?.code || '101'}
             </span>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 line-clamp-1">{exam.title}</h1>
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 line-clamp-1">{exam?.title || 'Đề thi Vật lí'}</h1>
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
-            <span>Thí sinh: <strong className="text-slate-700">{candidateInfo.name}</strong></span>
-            <span>Lớp: <strong className="text-slate-700">{candidateInfo.studentClass}</strong></span>
-            <span>SBD: <strong className="text-slate-700">{candidateInfo.candidateNumber}</strong></span>
+            <span>Thí sinh: <strong className="text-slate-700">{candidateInfo?.name || 'Thí sinh'}</strong></span>
+            <span>Lớp: <strong className="text-slate-700">{candidateInfo?.studentClass || ''}</strong></span>
+            <span>SBD: <strong className="text-slate-700">{candidateInfo?.candidateNumber || ''}</strong></span>
           </div>
         </div>
 
@@ -160,7 +161,7 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
                 </span>
                 <button
                   type="button"
-                  onClick={() => onToggleFlag(currentQuestion.id)}
+                  onClick={() => currentQuestion?.id && onToggleFlag(currentQuestion.id)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                     flaggedQuestionIds.has(currentQuestion.id)
                       ? 'bg-amber-100 text-amber-700'
@@ -172,15 +173,19 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
                 </button>
               </div>
 
-              {/* Tương thích linh hoạt props của QuestionCard an toàn */}
-              {React.createElement(QuestionCard as any, {
-                question: currentQuestion,
-                answer: (answers && currentQuestion?.id ? answers[currentQuestion.id] : undefined) || '',
-                userAnswer: (answers && currentQuestion?.id ? answers[currentQuestion.id] : undefined) || '',
-                currentAnswer: (answers && currentQuestion?.id ? answers[currentQuestion.id] : undefined) || '',
-                selectedAnswer: (answers && currentQuestion?.id ? answers[currentQuestion.id] : undefined) || '',
-                onAnswerChange: (val: any) => currentQuestion?.id && onAnswerChange(currentQuestion.id, val)
-              })}
+              {/* Truyền đầy đủ props an toàn cho QuestionCard để diệt trừ lỗi r[e.id] */}
+              <QuestionCard
+                question={currentQuestion}
+                index={safeIndex}
+                totalQuestions={questions.length}
+                answers={answers || {}}
+                onAnswerChange={(ans: any) => currentQuestion?.id && onAnswerChange(currentQuestion.id, ans)}
+                isFlagged={flaggedQuestionIds.has(currentQuestion.id)}
+                onToggleFlag={() => currentQuestion?.id && onToggleFlag(currentQuestion.id)}
+                onPrev={() => safeIndex > 0 && onSelectQuestion(safeIndex - 1)}
+                onNext={() => safeIndex < questions.length - 1 && onSelectQuestion(safeIndex + 1)}
+                isReviewMode={false}
+              />
 
               <div className="flex items-center justify-between mt-8 pt-4 border-t border-slate-100">
                 <button
@@ -195,7 +200,7 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
 
                 <button
                   type="button"
-                  disabled={safeIndex === questions.length - 1}
+                  disabled={safeIndex >= questions.length - 1}
                   onClick={() => onSelectQuestion(safeIndex + 1)}
                   className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 disabled:hover:bg-slate-100 text-slate-700 rounded-xl text-sm font-medium transition-all"
                 >
@@ -207,7 +212,7 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
           )}
         </div>
 
-        {/* Thanh bảng câu hỏi */}
+        {/* Bảng câu hỏi bên cạnh */}
         <div className="lg:col-span-1 bg-white rounded-2xl p-5 shadow-sm border border-slate-200 sticky top-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-slate-800 text-sm">Bảng câu hỏi</h3>
@@ -218,14 +223,15 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
 
           <div className="grid grid-cols-5 gap-2 max-h-[380px] overflow-y-auto pr-1">
             {questions.map((q, idx) => {
-              const ans = answers[q.id];
+              const qId = q?.id || `q-${idx}`;
+              const ans = (answers && answers[qId]) !== undefined ? answers[qId] : undefined;
               const isAnswered = ans !== undefined && ans !== null && String(ans).trim() !== '';
-              const isFlagged = flaggedQuestionIds.has(q.id);
+              const isFlagged = flaggedQuestionIds.has(qId);
               const isCurrent = idx === safeIndex;
 
               return (
                 <button
-                  key={q.id || idx}
+                  key={qId}
                   type="button"
                   onClick={() => onSelectQuestion(idx)}
                   className={`relative h-10 rounded-xl text-xs font-bold transition-all flex items-center justify-center ${
