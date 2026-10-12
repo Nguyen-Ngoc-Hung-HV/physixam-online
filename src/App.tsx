@@ -127,6 +127,32 @@ export default function App() {
     maxViolations: 5
   } as any);
 
+  // KHÔI PHỤC TÍNH NĂNG 6: ĐỒNG BỘ DỮ LIỆU TỪ MONGODB ATLAS KHI KHỞI ĐỘNG
+  useEffect(() => {
+    const fetchSubmissionsFromMongo = async () => {
+      try {
+        const response = await fetch('/api/submissions');
+        if (response.ok) {
+          const cloudData = await response.json();
+          if (Array.isArray(cloudData) && cloudData.length > 0) {
+            setSubmissions(cloudData);
+            try {
+              if (safeStorage?.setItem) {
+                safeStorage.setItem('physixam_submissions', JSON.stringify(cloudData));
+              } else {
+                localStorage.setItem('physixam_submissions', JSON.stringify(cloudData));
+              }
+            } catch (e) {}
+          }
+        }
+      } catch (err) {
+        console.warn('Không thể kết nối API MongoDB Atlas (sử dụng dữ liệu offline):', err);
+      }
+    };
+
+    fetchSubmissionsFromMongo();
+  }, []);
+
   useEffect(() => {
     if (exam?.durationMinutes) {
       setTimeRemainingSeconds(exam.durationMinutes * 60);
@@ -313,7 +339,8 @@ export default function App() {
     }));
   };
 
-  const handleSubmitExam = () => {
+  // KHÔI PHỤC TÍNH NĂNG 6: GỬI KẾT QUẢ BÀI THI LÊN MONGODB ATLAS
+  const handleSubmitExam = async () => {
     let score = 0;
     const detailedFeedback: any[] = [];
     const questionsList = (exam && Array.isArray(exam.questions)) ? exam.questions : (DEFAULT_EXAM.questions || []);
@@ -371,17 +398,23 @@ export default function App() {
     const safeExamCode = exam?.code || activeCode || '101';
     const newSub: StudentSubmission = {
       id: `sub-${Date.now()}`,
+      studentName: candidateInfo.name,
       candidateName: candidateInfo.name,
       studentClass: candidateInfo.studentClass,
       candidateNumber: candidateInfo.candidateNumber,
       examCode: safeExamCode,
+      totalScore: finalScore,
       score: finalScore,
-      submittedAt: new Date().toISOString(),
+      submittedAt: new Date().toLocaleString('vi-VN'),
+      timeSpentSeconds: Math.max(0, ((exam?.durationMinutes || 45) * 60) - timeRemainingSeconds),
+      submissionReason: 'normal',
+      violationCount: auditLog.violations.length,
       answers: answers || {},
       auditLog,
       evaluation: evalResult
     } as any;
 
+    // 1. Cập nhật state và bộ nhớ máy ngay lập tức
     setSubmissions((prev) => {
       const updated = [newSub, ...(prev || [])];
       try {
@@ -394,9 +427,21 @@ export default function App() {
       return updated;
     });
 
+    // 2. Gửi bất đồng bộ lên MongoDB Atlas thông qua API
+    try {
+      fetch('/api/submissions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSub)
+      }).catch((e) => console.warn('Lỗi ghi MongoDB Atlas:', e));
+    } catch (err) {
+      console.warn('Lỗi kết nối API gửi bài thi:', err);
+    }
+
     setStudentExamPhase('student_results');
   };
 
+  // KHÔI PHỤC TÍNH NĂNG 6: XÓA 1 BÀI NỘP TRÊN CẢ LOCAL VÀ MONGODB ATLAS
   const handleDeleteSubmission = async (submissionId: string) => {
     setSubmissions((prev: any[]) => {
       const updated = (prev || []).filter((s: any) => String(s.id || s._id) !== String(submissionId));
@@ -412,10 +457,11 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' }
       });
     } catch (err) {
-      console.warn('Lỗi khi xóa bài nộp trên server:', err);
+      console.warn('Lỗi khi xóa bài nộp trên MongoDB Atlas:', err);
     }
   };
 
+  // KHÔI PHỤC TÍNH NĂNG 6: XÓA TẤT CẢ TRÊN CẢ LOCAL VÀ MONGODB ATLAS
   const handleClearSubmissions = async () => {
     setSubmissions([]);
     try {
@@ -428,11 +474,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' }
       });
     } catch (err) {
-      console.warn('Lỗi khi xóa sạch danh sách trên server:', err);
+      console.warn('Lỗi khi xóa sạch danh sách trên MongoDB Atlas:', err);
     }
   };
 
-  // KHÔI PHỤC HOÀN CHỈNH TÍNH NĂNG 5: IN ẤN & XUẤT BẢN PDF
   const handleOpenPrint = (mode: 'exam_only' | 'exam_with_solutions') => {
     setActivePrintMode(mode);
     setAppMode('print');
@@ -456,7 +501,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased">
-      {/* THANH ĐIỀU HƯỚNG TẦNG ĐẦU */}
       <nav className="bg-slate-900 border-b border-slate-800 text-white px-4 py-2.5 sticky top-0 z-40 shadow-md print:hidden">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -500,7 +544,6 @@ export default function App() {
       </nav>
 
       <main className="max-w-7xl mx-auto px-4 py-6 pb-16 print:p-0 print:m-0 print:max-w-none">
-        {/* CHẾ ĐỘ 1: HỌC SINH LÀM BÀI / KẾT QUẢ */}
         {appMode === 'student' && (
           <div>
             {studentExamPhase === 'launch' && (
@@ -540,7 +583,6 @@ export default function App() {
           </div>
         )}
 
-        {/* CHẾ ĐỘ 2: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
         {appMode === 'teacher' && (
           <TeacherDashboard
             exam={safeCurrentExam}
@@ -567,10 +609,8 @@ export default function App() {
           />
         )}
 
-        {/* CHẾ ĐỘ 3: KHUNG XEM TRƯỚC VÀ IN ĐỀ THI / MA TRẬN ĐÁP ÁN (TÍNH NĂNG 5) */}
         {appMode === 'print' && (
           <div className="bg-white p-6 sm:p-10 rounded-3xl shadow-sm border border-slate-200 print:border-none print:shadow-none print:p-0">
-            {/* Thanh công cụ khi xem trước in (ẩn khi in giấy thực tế) */}
             <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
               <button
                 type="button"
@@ -596,7 +636,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Khung nội dung in chuẩn A4 */}
             {activePrintMode === 'matrix' ? (
               <div className="space-y-6">
                 <div className="text-center pb-4 border-b">
@@ -637,7 +676,6 @@ export default function App() {
               </div>
             ) : (
               <div className="space-y-6">
-                {/* Header chuẩn bài thi của Bộ GD&ĐT */}
                 <div className="flex justify-between items-start pb-4 border-b-2 border-slate-900">
                   <div className="text-center">
                     <p className="text-xs uppercase font-bold">SỞ GIÁO DỤC VÀ ĐÀO TẠO</p>
@@ -655,7 +693,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Danh sách câu hỏi in */}
                 <div className="space-y-5 pt-2">
                   {safeCurrentExam.questions.map((q: any, idx: number) => (
                     <div key={q.id || idx} className="space-y-2 text-sm leading-relaxed">
@@ -688,7 +725,6 @@ export default function App() {
         )}
       </main>
 
-      {/* MODAL QUẢN LÝ JSON */}
       {isJsonModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
           <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
