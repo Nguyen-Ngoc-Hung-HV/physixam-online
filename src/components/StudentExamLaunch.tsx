@@ -28,7 +28,7 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
   candidateInfo,
   timeRemainingSeconds,
   onAnswerChange,
-  answers,
+  answers = {},
   flaggedQuestionIds,
   onToggleFlag,
   currentQuestionIndex,

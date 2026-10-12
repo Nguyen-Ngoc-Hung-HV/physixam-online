@@ -21,7 +21,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   question,
   index,
   totalQuestions,
-  answers,
+  answers = {},
   onAnswerChange,
   isFlagged,
   onToggleFlag,
@@ -29,7 +29,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   onNext,
   isReviewMode = false,
 }) => {
-  const currentAnswer: any = answers[question.id];
+const currentAnswer: any = (answers && question?.id) ? answers[question.id] : undefined;
   const q: any = question;
 
   return (
