@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Exam, StudentAnswers, AntiCheatConfig, ViolationEvent, StudentSubmission } from './types/exam';
+import { Exam, StudentAnswers, AntiCheatConfig, ViolationEvent, StudentSubmission, ExamVariantBundle } from './types/exam';
 import { StudentExamLaunch } from './components/StudentExamLaunch';
 import { ExamResults, PrintMode } from './components/ExamResults';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { safeStorage } from './utils/safeStorage';
 import { ExamPackage, ExamAssignmentInfo } from './types/curriculum';
-import { LayoutDashboard, GraduationCap, Code, Copy, Check, Download, Upload, X } from 'lucide-react';
+import { LayoutDashboard, GraduationCap, Code, Copy, Check, X } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
   id: 'exam-101',
@@ -48,7 +48,6 @@ const DEFAULT_EXAM: Exam = {
 } as any;
 
 export default function App() {
-  // Chuyển đổi tab chế độ làm việc: 'student' (Học sinh) | 'teacher' (Giáo viên)
   const [appMode, setAppMode] = useState<'student' | 'teacher'>('teacher');
 
   const [exam, setExam] = useState<Exam>(() => {
@@ -66,7 +65,27 @@ export default function App() {
     return DEFAULT_EXAM;
   });
 
+  const [bundle, setBundle] = useState<ExamVariantBundle | null>(() => {
+    try {
+      const saved = safeStorage?.getItem ? safeStorage.getItem('physixam_bundle') : localStorage.getItem('physixam_bundle');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
   const [activeCode, setActiveCode] = useState<string>(() => exam?.code || '101');
+
+  // Lọc an toàn mảng string[], loại bỏ triệt để undefined
+  const availableCodes: string[] = React.useMemo(() => {
+    if (bundle && Array.isArray(bundle.variants) && bundle.variants.length > 0) {
+      const codes = bundle.variants
+        .map((v: any) => v?.code)
+        .filter((c: any): c is string => typeof c === 'string' && c.trim().length > 0);
+      if (codes.length > 0) return codes;
+    }
+    return [exam?.code || '101'];
+  }, [bundle, exam?.code]);
 
   const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
     try {
@@ -86,7 +105,6 @@ export default function App() {
     }
   });
 
-  // Modal quản lý JSON đề thi
   const [isJsonModalOpen, setIsJsonModalOpen] = useState<boolean>(false);
   const [jsonText, setJsonText] = useState<string>('');
   const [jsonCopied, setJsonCopied] = useState<boolean>(false);
@@ -133,13 +151,61 @@ export default function App() {
     return () => clearInterval(timer);
   }, [studentExamPhase, appMode]);
 
-  // Luồng nạp đề từ Ngân hàng đề thi
+  // Luồng áp dụng gói mã đề trộn với ép kiểu an toàn
+  const handleApplyBundle = (newBundle: ExamVariantBundle) => {
+    if (!newBundle || !Array.isArray(newBundle.variants) || newBundle.variants.length === 0) return;
+    setBundle(newBundle);
+
+    try {
+      const serialized = JSON.stringify(newBundle);
+      if (safeStorage?.setItem) {
+        safeStorage.setItem('physixam_bundle', serialized);
+      } else {
+        localStorage.setItem('physixam_bundle', serialized);
+      }
+    } catch (e) {
+      console.warn('Lỗi lưu gói mã đề trộn:', e);
+    }
+
+    // Biến thể đầu tiên có thể là chính variant hoặc variant.examData
+    const firstVariant: any = newBundle.variants[0];
+    const targetExam: Exam = firstVariant?.examData || firstVariant;
+    if (targetExam && Array.isArray((targetExam as any).questions)) {
+      handleUpdateExamDirectly(targetExam);
+      setActiveCode(firstVariant?.code || targetExam?.code || '101');
+    }
+  };
+
+  // Luồng chuyển đổi mã đề thi
+  const handleSelectExamCode = (code: string) => {
+    if (!code) return;
+    setActiveCode(code);
+    if (bundle && Array.isArray(bundle.variants)) {
+      const matched: any = bundle.variants.find((v: any) => v?.code === code);
+      if (matched) {
+        const targetExam: Exam = matched.examData || matched;
+        if (targetExam && Array.isArray((targetExam as any).questions)) {
+          setExam(targetExam);
+          setAnswers({});
+          setFlaggedQuestionIds(new Set());
+          setCurrentQuestionIndex(0);
+          setTimeRemainingSeconds(((targetExam as any).durationMinutes || 45) * 60);
+          return;
+        }
+      }
+    }
+  };
+
   const handleLoadExamFromBank = (selectedPkg: ExamPackage) => {
     if (!selectedPkg || !selectedPkg.examData) return;
     const targetExam = selectedPkg.examData;
     
     setExam(targetExam);
     setActiveCode(targetExam.code || selectedPkg.code || '101');
+    setBundle(null);
+    try {
+      localStorage.removeItem('physixam_bundle');
+    } catch (e) {}
     
     try {
       const serialized = JSON.stringify(targetExam);
@@ -173,7 +239,6 @@ export default function App() {
     } catch (e) {}
   };
 
-  // Mở modal JSON
   const handleOpenJsonModal = () => {
     setJsonText(JSON.stringify(exam, null, 2));
     setJsonError(null);
@@ -181,7 +246,6 @@ export default function App() {
     setIsJsonModalOpen(true);
   };
 
-  // Cập nhật đề từ modal JSON
   const handleApplyJson = () => {
     try {
       const parsed = JSON.parse(jsonText);
@@ -201,7 +265,6 @@ export default function App() {
     setTimeout(() => setJsonCopied(false), 2000);
   };
 
-  // Luồng giao đề thi
   const handleAssignExam = (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
     setAssignments((prev) => {
       const updated = [assignment, ...prev.filter((a) => a.id !== assignment.id)];
@@ -308,7 +371,7 @@ export default function App() {
 
     setEvaluation(evalResult);
 
-    const safeExamCode = exam?.code || '101';
+    const safeExamCode = exam?.code || activeCode || '101';
     const newSub: StudentSubmission = {
       id: `sub-${Date.now()}`,
       candidateName: candidateInfo.name,
@@ -380,7 +443,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased">
-      {/* THANH ĐIỀU HƯỚNG TẦNG ĐẦU: CHUYỂN ĐỔI CHẾ ĐỘ GIÁO VIÊN <-> HỌC SINH */}
       <nav className="bg-slate-900 border-b border-slate-800 text-white px-4 py-2.5 sticky top-0 z-40 shadow-md">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -423,9 +485,7 @@ export default function App() {
         </div>
       </nav>
 
-      {/* KHÔNG GIAN LÀM VIỆC THEO TAB ĐÃ CHỌN */}
       <main className="max-w-7xl mx-auto px-4 py-6 pb-16">
-        {/* TAB 1: GIAO DIỆN HỌC SINH LÀM BÀI / XEM KẾT QUẢ */}
         {appMode === 'student' && (
           <div>
             {studentExamPhase === 'launch' && (
@@ -465,13 +525,15 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 2: BẢNG ĐIỀU KHIỂN GIÁO VIÊN ĐẦY ĐỦ */}
         {appMode === 'teacher' && (
           <TeacherDashboard
             exam={safeCurrentExam}
             currentExam={safeCurrentExam}
             activeCode={activeCode}
-            onSelectExamCode={setActiveCode}
+            availableCodes={availableCodes}
+            onSelectExamCode={handleSelectExamCode}
+            bundle={bundle}
+            onApplyBundle={handleApplyBundle}
             onSelectExamPackage={handleLoadExamFromBank}
             onUpdateExam={handleUpdateExamDirectly}
             submissions={submissions || []}
@@ -485,13 +547,10 @@ export default function App() {
             onOpenPrint={() => handleOpenPrint('exam_only' as any)}
             onOpenTeacherJsonModal={handleOpenJsonModal}
             onPreviewAsStudent={() => setAppMode('student')}
-            bundle={null}
-            onApplyBundle={() => {}}
           />
         )}
       </main>
 
-      {/* MODAL QUẢN LÝ / XUẤT / NHẬP JSON ĐỀ THI CHO GIÁO VIÊN */}
       {isJsonModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
