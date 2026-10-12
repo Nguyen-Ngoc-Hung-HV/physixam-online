@@ -1,11 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Exam, StudentAnswers, AntiCheatConfig, ViolationEvent, StudentSubmission, ExamVariantBundle } from './types/exam';
 import { StudentExamLaunch } from './components/StudentExamLaunch';
 import { ExamResults, PrintMode } from './components/ExamResults';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { safeStorage } from './utils/safeStorage';
 import { ExamPackage, ExamAssignmentInfo } from './types/curriculum';
-import { LayoutDashboard, GraduationCap, Code, Copy, Check, X, Printer, ArrowLeft } from 'lucide-react';
+import { 
+  LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
+  Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, UploadCloud
+} from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
   id: 'exam-101',
@@ -47,9 +50,31 @@ const DEFAULT_EXAM: Exam = {
   ]
 } as any;
 
+const DEFAULT_BRANDING = {
+  schoolName: 'HỆ THỐNG KHẢO THÍ VẬT LÍ TRỰC TUYẾN',
+  subtitle: 'CHƯƠNG TRÌNH GIÁO DỤC PHỔ THÔNG 2018 • PHÂN HÓA NĂNG LỰC HỌC SINH',
+  logoUrl: '',
+  bannerUrl: 'https://images.unsplash.com/photo-1507413245164-6160d8298b31?q=80&w=2070&auto=format&fit=crop'
+};
+
 export default function App() {
   const [appMode, setAppMode] = useState<'student' | 'teacher' | 'print'>('teacher');
   const [activePrintMode, setActivePrintMode] = useState<'exam_only' | 'exam_with_solutions' | 'matrix'>('exam_only');
+
+  // Khởi tạo Branding (Logo & Pano Banner)
+  const [branding, setBranding] = useState(() => {
+    try {
+      const saved = localStorage.getItem('physixam_branding');
+      return saved ? JSON.parse(saved) : DEFAULT_BRANDING;
+    } catch (e) {
+      return DEFAULT_BRANDING;
+    }
+  });
+
+  const [isBrandingModalOpen, setIsBrandingModalOpen] = useState(false);
+  const [brandingDraft, setBrandingDraft] = useState(branding);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const bannerInputRef = useRef<HTMLInputElement>(null);
 
   const [exam, setExam] = useState<Exam>(() => {
     try {
@@ -127,7 +152,6 @@ export default function App() {
     maxViolations: 5
   } as any);
 
-  // KHÔI PHỤC TÍNH NĂNG 6: ĐỒNG BỘ DỮ LIỆU TỪ MONGODB ATLAS KHI KHỞI ĐỘNG
   useEffect(() => {
     const fetchSubmissionsFromMongo = async () => {
       try {
@@ -176,6 +200,28 @@ export default function App() {
     }, 1000);
     return () => clearInterval(timer);
   }, [studentExamPhase, appMode]);
+
+  // Lưu cấu hình Branding
+  const handleSaveBranding = () => {
+    setBranding(brandingDraft);
+    try {
+      localStorage.setItem('physixam_branding', JSON.stringify(brandingDraft));
+    } catch (e) {}
+    setIsBrandingModalOpen(false);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'logoUrl' | 'bannerUrl') => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setBrandingDraft((prev: any) => ({ ...prev, [field]: reader.result }));
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const handleApplyBundle = (newBundle: ExamVariantBundle) => {
     if (!newBundle || !Array.isArray(newBundle.variants) || newBundle.variants.length === 0) return;
@@ -339,7 +385,6 @@ export default function App() {
     }));
   };
 
-  // KHÔI PHỤC TÍNH NĂNG 6: GỬI KẾT QUẢ BÀI THI LÊN MONGODB ATLAS
   const handleSubmitExam = async () => {
     let score = 0;
     const detailedFeedback: any[] = [];
@@ -414,7 +459,6 @@ export default function App() {
       evaluation: evalResult
     } as any;
 
-    // 1. Cập nhật state và bộ nhớ máy ngay lập tức
     setSubmissions((prev) => {
       const updated = [newSub, ...(prev || [])];
       try {
@@ -427,7 +471,6 @@ export default function App() {
       return updated;
     });
 
-    // 2. Gửi bất đồng bộ lên MongoDB Atlas thông qua API
     try {
       fetch('/api/submissions', {
         method: 'POST',
@@ -441,7 +484,6 @@ export default function App() {
     setStudentExamPhase('student_results');
   };
 
-  // KHÔI PHỤC TÍNH NĂNG 6: XÓA 1 BÀI NỘP TRÊN CẢ LOCAL VÀ MONGODB ATLAS
   const handleDeleteSubmission = async (submissionId: string) => {
     setSubmissions((prev: any[]) => {
       const updated = (prev || []).filter((s: any) => String(s.id || s._id) !== String(submissionId));
@@ -461,7 +503,6 @@ export default function App() {
     }
   };
 
-  // KHÔI PHỤC TÍNH NĂNG 6: XÓA TẤT CẢ TRÊN CẢ LOCAL VÀ MONGODB ATLAS
   const handleClearSubmissions = async () => {
     setSubmissions([]);
     try {
@@ -501,49 +542,115 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased">
+      {/* THANH ĐIỀU HƯỚNG TẦNG ĐẦU */}
       <nav className="bg-slate-900 border-b border-slate-800 text-white px-4 py-2.5 sticky top-0 z-40 shadow-md print:hidden">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center font-black text-sm">
-              PX
-            </div>
+            {branding.logoUrl ? (
+              <img src={branding.logoUrl} alt="Logo" className="w-8 h-8 rounded-xl object-contain bg-white/10 p-0.5 border border-white/20" />
+            ) : (
+              <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center font-black text-sm shadow-inner">
+                PX
+              </div>
+            )}
             <div>
-              <span className="font-bold text-sm tracking-wide block">PhysiXam Online</span>
-              <span className="text-3xs text-indigo-300 font-mono">Chương trình GDPT 2018</span>
+              <span className="font-bold text-sm tracking-wide block leading-tight">{branding.schoolName}</span>
+              <span className="text-3xs text-indigo-300 font-mono">{branding.subtitle}</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-xl border border-slate-700">
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setAppMode('teacher')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                appMode === 'teacher'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
+              onClick={() => {
+                setBrandingDraft(branding);
+                setIsBrandingModalOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer"
+              title="Tùy biến Logo và Hình nền Banner"
             >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>Bảng điều khiển Giáo viên</span>
+              <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">Cài đặt Banner & Logo</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setAppMode('student')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
-                appMode === 'student'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <GraduationCap className="w-4 h-4" />
-              <span>Giao diện Học sinh làm bài</span>
-            </button>
+            <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setAppMode('teacher')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  appMode === 'teacher'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                <span>Bảng điều khiển Giáo viên</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAppMode('student')}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  appMode === 'student'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <GraduationCap className="w-4 h-4" />
+                <span>Giao diện Học sinh làm bài</span>
+              </button>
+            </div>
           </div>
         </div>
       </nav>
 
+      {/* PANO BANNER TRANG CHỦ CHUYÊN NGHIỆP */}
+      {appMode !== 'print' && (
+        <div className="relative overflow-hidden bg-slate-900 border-b border-slate-800 text-white py-8 sm:py-12 print:hidden shadow-sm">
+          {branding.bannerUrl && (
+            <div className="absolute inset-0 z-0">
+              <img
+                src={branding.bannerUrl}
+                alt="Pano Banner"
+                className="w-full h-full object-cover opacity-25 filter blur-[1px]"
+              />
+              <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-900/90 to-indigo-950/80" />
+            </div>
+          )}
+
+          <div className="max-w-7xl mx-auto px-4 relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div className="space-y-2 max-w-3xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-200 text-xs font-semibold backdrop-blur-md">
+                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                <span>PhysiXam Online • Chuẩn Bộ Giáo dục & Đào tạo</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black tracking-tight text-white drop-shadow-sm">
+                {branding.schoolName}
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-300 font-medium leading-relaxed">
+                {branding.subtitle}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setBrandingDraft(branding);
+                  setIsBrandingModalOpen(true);
+                }}
+                className="px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold transition flex items-center gap-2 backdrop-blur-md cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <ImageIcon className="w-4 h-4 text-amber-300" />
+                <span>Đổi Banner / Logo</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-7xl mx-auto px-4 py-6 pb-16 print:p-0 print:m-0 print:max-w-none">
+        {/* CHẾ ĐỘ 1: HỌC SINH LÀM BÀI / KẾT QUẢ */}
         {appMode === 'student' && (
           <div>
             {studentExamPhase === 'launch' && (
@@ -583,6 +690,7 @@ export default function App() {
           </div>
         )}
 
+        {/* CHẾ ĐỘ 2: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
         {appMode === 'teacher' && (
           <TeacherDashboard
             exam={safeCurrentExam}
@@ -609,6 +717,7 @@ export default function App() {
           />
         )}
 
+        {/* CHẾ ĐỘ 3: KHUNG XEM TRƯỚC VÀ IN ĐỀ THI / MA TRẬN ĐÁP ÁN */}
         {appMode === 'print' && (
           <div className="bg-white p-6 sm:p-10 rounded-3xl shadow-sm border border-slate-200 print:border-none print:shadow-none print:p-0">
             <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
@@ -725,6 +834,135 @@ export default function App() {
         )}
       </main>
 
+      {/* MODAL CÀI ĐẶT PANO BANNER & LOGO TRANG CHỦ */}
+      {isBrandingModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+            <div className="flex items-center justify-between border-b pb-4">
+              <div className="flex items-center gap-2">
+                <ImageIcon className="w-5 h-5 text-indigo-600" />
+                <h3 className="font-bold text-slate-800 text-base">Cài đặt Logo & Hình nền Pano</h3>
+              </div>
+              <button 
+                onClick={() => setIsBrandingModalOpen(false)} 
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Tên Trường / Đơn vị tổ chức:</label>
+                <input
+                  type="text"
+                  value={brandingDraft.schoolName}
+                  onChange={(e) => setBrandingDraft({ ...brandingDraft, schoolName: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-600 outline-none font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Khẩu hiệu / Tiêu đề phụ:</label>
+                <input
+                  type="text"
+                  value={brandingDraft.subtitle}
+                  onChange={(e) => setBrandingDraft({ ...brandingDraft, subtitle: e.target.value })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-indigo-600 outline-none font-medium"
+                />
+              </div>
+
+              {/* Logo */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Logo Thương hiệu:</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    value={brandingDraft.logoUrl}
+                    onChange={(e) => setBrandingDraft({ ...brandingDraft, logoUrl: e.target.value })}
+                    placeholder="Dán đường dẫn URL logo hoặc tải tệp..."
+                    className="flex-1 px-3.5 py-2 rounded-xl border border-slate-300 focus:border-indigo-600 outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => logoInputRef.current?.click()}
+                    className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <UploadCloud className="w-4 h-4" />
+                    <span>Tải ảnh</span>
+                  </button>
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleFileUpload(e, 'logoUrl')}
+                    className="hidden"
+                  />
+                </div>
+              </div>
+
+              {/* Banner */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Hình nền Pano Banner:</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    value={brandingDraft.bannerUrl}
+                    onChange={(e) => setBrandingDraft({ ...brandingDraft, bannerUrl: e.target.value })}
+                    placeholder="Dán đường dẫn URL banner hoặc tải tệp..."
+                    className="flex-1 px-3.5 py-2 rounded-xl border border-slate-300 focus:border-indigo-600 outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => bannerInputRef.current?.click()}
+                    className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <UploadCloud className="w-4 h-4" />
+                    <span>Tải ảnh</span>
+                  </button>
+                  <input
+                    ref={bannerInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => handleFileUpload(e, 'bannerUrl')}
+                    className="hidden"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setBrandingDraft(DEFAULT_BRANDING)}
+                className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Khôi phục mặc định</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBrandingModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveBranding}
+                  className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm cursor-pointer"
+                >
+                  Lưu thay đổi
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL QUẢN LÝ JSON */}
       {isJsonModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
           <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
