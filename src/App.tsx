@@ -4,7 +4,8 @@ import { StudentExamLaunch } from './components/StudentExamLaunch';
 import { ExamResults, PrintMode } from './components/ExamResults';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { safeStorage } from './utils/safeStorage';
-import { ExamPackage } from './types/curriculum';
+import { ExamPackage, ExamAssignmentInfo } from './types/curriculum';
+import { LayoutDashboard, GraduationCap, Code, Copy, Check, Download, Upload, X } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
   id: 'exam-101',
@@ -47,6 +48,9 @@ const DEFAULT_EXAM: Exam = {
 } as any;
 
 export default function App() {
+  // Chuyển đổi tab chế độ làm việc: 'student' (Học sinh) | 'teacher' (Giáo viên)
+  const [appMode, setAppMode] = useState<'student' | 'teacher'>('teacher');
+
   const [exam, setExam] = useState<Exam>(() => {
     try {
       const saved = safeStorage?.getItem ? safeStorage.getItem('physixam_current_exam') : localStorage.getItem('physixam_current_exam');
@@ -73,6 +77,21 @@ export default function App() {
     }
   });
 
+  const [assignments, setAssignments] = useState<ExamAssignmentInfo[]>(() => {
+    try {
+      const saved = localStorage.getItem('physixam_assignments');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  // Modal quản lý JSON đề thi
+  const [isJsonModalOpen, setIsJsonModalOpen] = useState<boolean>(false);
+  const [jsonText, setJsonText] = useState<string>('');
+  const [jsonCopied, setJsonCopied] = useState<boolean>(false);
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
   const [studentExamPhase, setStudentExamPhase] = useState<'launch' | 'student_results'>('launch');
   const [answers, setAnswers] = useState<StudentAnswers>(() => ({}));
   const [flaggedQuestionIds, setFlaggedQuestionIds] = useState<Set<string>>(new Set());
@@ -90,7 +109,6 @@ export default function App() {
     maxViolations: 5
   } as any);
 
-  // Cập nhật lại thời gian làm bài khi đề thi thay đổi
   useEffect(() => {
     if (exam?.durationMinutes) {
       setTimeRemainingSeconds(exam.durationMinutes * 60);
@@ -101,7 +119,7 @@ export default function App() {
   }, [exam]);
 
   useEffect(() => {
-    if (studentExamPhase !== 'launch') return;
+    if (studentExamPhase !== 'launch' || appMode !== 'student') return;
     const timer = setInterval(() => {
       setTimeRemainingSeconds((prev) => {
         if (prev <= 1) {
@@ -113,18 +131,16 @@ export default function App() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [studentExamPhase]);
+  }, [studentExamPhase, appMode]);
 
-  // LUỒNG NẠP ĐỀ TỪ NGÂN HÀNG HOÀN CHỈNH
+  // Luồng nạp đề từ Ngân hàng đề thi
   const handleLoadExamFromBank = (selectedPkg: ExamPackage) => {
     if (!selectedPkg || !selectedPkg.examData) return;
     const targetExam = selectedPkg.examData;
     
-    // 1. Cập nhật đề thi hiện hành
     setExam(targetExam);
     setActiveCode(targetExam.code || selectedPkg.code || '101');
     
-    // 2. Lưu vào storage để duy trì phiên làm việc
     try {
       const serialized = JSON.stringify(targetExam);
       if (safeStorage?.setItem) {
@@ -136,7 +152,6 @@ export default function App() {
       console.warn('Lỗi lưu đề nạp từ ngân hàng:', e);
     }
 
-    // 3. Reset trạng thái bài làm của học sinh theo đề mới
     setAnswers({});
     setFlaggedQuestionIds(new Set());
     setCurrentQuestionIndex(0);
@@ -156,6 +171,61 @@ export default function App() {
         localStorage.setItem('physixam_current_exam', serialized);
       }
     } catch (e) {}
+  };
+
+  // Mở modal JSON
+  const handleOpenJsonModal = () => {
+    setJsonText(JSON.stringify(exam, null, 2));
+    setJsonError(null);
+    setJsonCopied(false);
+    setIsJsonModalOpen(true);
+  };
+
+  // Cập nhật đề từ modal JSON
+  const handleApplyJson = () => {
+    try {
+      const parsed = JSON.parse(jsonText);
+      if (!parsed || !Array.isArray(parsed.questions)) {
+        throw new Error('Dữ liệu JSON không hợp lệ: Thiếu mảng questions.');
+      }
+      handleUpdateExamDirectly(parsed);
+      setIsJsonModalOpen(false);
+    } catch (err: any) {
+      setJsonError(err?.message || 'Định dạng JSON không hợp lệ.');
+    }
+  };
+
+  const handleCopyJson = () => {
+    navigator.clipboard.writeText(jsonText);
+    setJsonCopied(true);
+    setTimeout(() => setJsonCopied(false), 2000);
+  };
+
+  // Luồng giao đề thi
+  const handleAssignExam = (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
+    setAssignments((prev) => {
+      const updated = [assignment, ...prev.filter((a) => a.id !== assignment.id)];
+      try {
+        localStorage.setItem('physixam_assignments', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+
+    handleLoadExamFromBank(pkg);
+
+    if (switchToStudent) {
+      setAppMode('student');
+    }
+  };
+
+  const handleDeleteAssignment = (assignId: string) => {
+    setAssignments((prev) => {
+      const updated = prev.filter((a) => a.id !== assignId);
+      try {
+        localStorage.setItem('physixam_assignments', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
   };
 
   const handleAnswerChange = (questionId: string, answer: any) => {
@@ -310,65 +380,180 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased">
-      <main className="pb-12">
-        {studentExamPhase === 'launch' && (
-          <StudentExamLaunch
+      {/* THANH ĐIỀU HƯỚNG TẦNG ĐẦU: CHUYỂN ĐỔI CHẾ ĐỘ GIÁO VIÊN <-> HỌC SINH */}
+      <nav className="bg-slate-900 border-b border-slate-800 text-white px-4 py-2.5 sticky top-0 z-40 shadow-md">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center font-black text-sm">
+              PX
+            </div>
+            <div>
+              <span className="font-bold text-sm tracking-wide block">PhysiXam Online</span>
+              <span className="text-3xs text-indigo-300 font-mono">Chương trình GDPT 2018</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-800 p-1 rounded-xl border border-slate-700">
+            <button
+              type="button"
+              onClick={() => setAppMode('teacher')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                appMode === 'teacher'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              <span>Bảng điều khiển Giáo viên</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAppMode('student')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                appMode === 'student'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <GraduationCap className="w-4 h-4" />
+              <span>Giao diện Học sinh làm bài</span>
+            </button>
+          </div>
+        </div>
+      </nav>
+
+      {/* KHÔNG GIAN LÀM VIỆC THEO TAB ĐÃ CHỌN */}
+      <main className="max-w-7xl mx-auto px-4 py-6 pb-16">
+        {/* TAB 1: GIAO DIỆN HỌC SINH LÀM BÀI / XEM KẾT QUẢ */}
+        {appMode === 'student' && (
+          <div>
+            {studentExamPhase === 'launch' && (
+              <StudentExamLaunch
+                exam={safeCurrentExam}
+                antiCheatConfig={antiCheatConfig}
+                candidateInfo={candidateInfo}
+                timeRemainingSeconds={timeRemainingSeconds}
+                onAnswerChange={handleAnswerChange}
+                answers={answers || {}}
+                flaggedQuestionIds={flaggedQuestionIds || new Set()}
+                onToggleFlag={handleToggleFlag}
+                currentQuestionIndex={currentQuestionIndex}
+                onSelectQuestion={setCurrentQuestionIndex}
+                onSubmitExam={handleSubmitExam}
+                onRecordViolation={handleRecordViolation}
+              />
+            )}
+
+            {studentExamPhase === 'student_results' && evaluation && (
+              <ExamResults
+                exam={safeCurrentExam}
+                answers={answers || {}}
+                evaluation={evaluation}
+                candidateInfo={candidateInfo}
+                timeRemainingSeconds={timeRemainingSeconds}
+                auditLog={auditLog}
+                onRetake={() => {
+                  setAnswers({});
+                  setStudentExamPhase('launch');
+                  setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
+                }}
+                onOpenTeacherMode={() => setAppMode('teacher')}
+                onOpenPrint={(printMode) => handleOpenPrint(printMode as any)}
+              />
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: BẢNG ĐIỀU KHIỂN GIÁO VIÊN ĐẦY ĐỦ */}
+        {appMode === 'teacher' && (
+          <TeacherDashboard
             exam={safeCurrentExam}
+            currentExam={safeCurrentExam}
+            activeCode={activeCode}
+            onSelectExamCode={setActiveCode}
+            onSelectExamPackage={handleLoadExamFromBank}
+            onUpdateExam={handleUpdateExamDirectly}
+            submissions={submissions || []}
+            onDeleteSubmission={handleDeleteSubmission}
+            onClearSubmissions={handleClearSubmissions}
             antiCheatConfig={antiCheatConfig}
-            candidateInfo={candidateInfo}
-            timeRemainingSeconds={timeRemainingSeconds}
-            onAnswerChange={handleAnswerChange}
-            answers={answers || {}}
-            flaggedQuestionIds={flaggedQuestionIds || new Set()}
-            onToggleFlag={handleToggleFlag}
-            currentQuestionIndex={currentQuestionIndex}
-            onSelectQuestion={setCurrentQuestionIndex}
-            onSubmitExam={handleSubmitExam}
-            onRecordViolation={handleRecordViolation}
+            onChangeAntiCheatConfig={setAntiCheatConfig}
+            assignments={assignments}
+            onAssignExam={handleAssignExam}
+            onDeleteAssignment={handleDeleteAssignment}
+            onOpenPrint={() => handleOpenPrint('exam_only' as any)}
+            onOpenTeacherJsonModal={handleOpenJsonModal}
+            onPreviewAsStudent={() => setAppMode('student')}
+            bundle={null}
+            onApplyBundle={() => {}}
           />
         )}
-
-        {studentExamPhase === 'student_results' && evaluation && (
-          <ExamResults
-            exam={safeCurrentExam}
-            answers={answers || {}}
-            evaluation={evaluation}
-            candidateInfo={candidateInfo}
-            timeRemainingSeconds={timeRemainingSeconds}
-            auditLog={auditLog}
-            onRetake={() => {
-              setAnswers({});
-              setStudentExamPhase('launch');
-              setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
-            }}
-            onOpenTeacherMode={() => {}}
-            onOpenPrint={(printMode) => handleOpenPrint(printMode as any)}
-          />
-        )}
-
-        {/* Bảng điều khiển Giáo viên - Nối trọn vẹn luồng nạp đề từ Ngân hàng */}
-        <TeacherDashboard
-          exam={safeCurrentExam}
-          currentExam={safeCurrentExam}
-          activeCode={activeCode}
-          onSelectExamCode={setActiveCode}
-          onSelectExamPackage={handleLoadExamFromBank}
-          onUpdateExam={handleUpdateExamDirectly}
-          submissions={submissions || []}
-          onDeleteSubmission={handleDeleteSubmission}
-          onClearSubmissions={handleClearSubmissions}
-          antiCheatConfig={antiCheatConfig}
-          onChangeAntiCheatConfig={setAntiCheatConfig}
-          bundle={null}
-          onApplyBundle={() => {}}
-          onOpenPrint={() => handleOpenPrint('exam_only' as any)}
-          onOpenTeacherJsonModal={() => {}}
-          onPreviewAsStudent={() => {
-            setStudentExamPhase('launch');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-        />
       </main>
+
+      {/* MODAL QUẢN LÝ / XUẤT / NHẬP JSON ĐỀ THI CHO GIÁO VIÊN */}
+      {isJsonModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
+            <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Code className="w-5 h-5 text-indigo-400" />
+                <h4 className="font-bold text-sm">Quản lý Cấu trúc Đề thi JSON</h4>
+              </div>
+              <button 
+                onClick={() => setIsJsonModalOpen(false)} 
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 flex-1 overflow-hidden flex flex-col gap-3">
+              <div className="flex items-center justify-between text-xs text-slate-500">
+                <span>Thầy có thể sao chép, lưu trữ hoặc dán cấu trúc JSON mới để cập nhật đề thi:</span>
+                <button
+                  type="button"
+                  onClick={handleCopyJson}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
+                >
+                  {jsonCopied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4 text-indigo-600" />}
+                  <span>{jsonCopied ? 'Đã sao chép!' : 'Sao chép JSON'}</span>
+                </button>
+              </div>
+
+              {jsonError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+                  {jsonError}
+                </div>
+              )}
+
+              <textarea
+                value={jsonText}
+                onChange={(e) => setJsonText(e.target.value)}
+                className="w-full flex-1 p-4 rounded-2xl bg-slate-900 text-emerald-400 font-mono text-xs outline-none border border-slate-800 resize-none min-h-[300px]"
+                spellCheck={false}
+              />
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsJsonModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-200 transition cursor-pointer"
+              >
+                Đóng
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyJson}
+                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition cursor-pointer shadow-sm"
+              >
+                Áp dụng JSON vào hệ thống
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
