@@ -8,7 +8,7 @@ import { ExamPackage, ExamAssignmentInfo } from './types/curriculum';
 import { 
   Home, LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
   Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, 
-  UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, FileText, CheckCircle2
+  UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, CheckCircle2
 } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
@@ -506,7 +506,7 @@ export default function App() {
       <header className="sticky top-0 z-40 px-3 sm:px-6 py-3 print:hidden">
         <div className="max-w-7xl mx-auto backdrop-blur-xl bg-slate-900/90 border border-slate-800/80 rounded-2xl shadow-xl shadow-slate-950/20 px-4 py-2.5 flex items-center justify-between gap-4">
           
-          {/* Logo & Brand Identity */}
+          {/* Logo & Tên đơn vị */}
           <div 
             onClick={() => setAppMode('home')}
             className="flex items-center gap-3 cursor-pointer group select-none min-w-0"
@@ -520,7 +520,7 @@ export default function App() {
               />
             ) : (
               <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-sm shadow-md group-hover:scale-105 transition shrink-0">
-                <Atom className="w-5 h-5 animate-spin-slow" />
+                <Atom className="w-5 h-5" />
               </div>
             )}
             <div className="min-w-0">
@@ -533,7 +533,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Right Action Switcher */}
+          {/* Cụm nút chuyển tab */}
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -601,7 +601,6 @@ export default function App() {
           {/* PANO BANNER HERO CARD HOÀNH TRÁNG */}
           <section className="relative rounded-3xl overflow-hidden shadow-2xl border border-indigo-900/40 bg-slate-950 min-h-[380px] sm:min-h-[440px] flex items-center">
             
-            {/* Ảnh nền Pano với Overlay đa tầng */}
             <div 
               className="absolute inset-0 bg-cover bg-center transition-all duration-700 filter brightness-75 scale-105"
               style={{ backgroundImage: `url(${branding.bannerUrl || PRESET_BANNERS[0].url})` }}
@@ -609,11 +608,10 @@ export default function App() {
             <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/80 to-indigo-950/70" />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.25),transparent_50%)]" />
 
-            {/* Nội dung Banner */}
             <div className="relative z-10 p-6 sm:p-12 lg:p-16 max-w-4xl space-y-5">
               
               <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-xs font-black backdrop-blur-md shadow-xs">
-                <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                <Sparkles className="w-4 h-4 text-amber-300" />
                 <span>PhysiXam Online • Hệ thống Khảo thí Vật lí Chuẩn GDPT 2018</span>
               </div>
 
@@ -625,7 +623,6 @@ export default function App() {
                 {branding.subtitle}
               </p>
 
-              {/* Nút hành động chính */}
               <div className="flex flex-wrap items-center gap-3 pt-3">
                 <button
                   type="button"
@@ -661,7 +658,7 @@ export default function App() {
             </div>
           </section>
 
-          {/* 3 THẺ ĐIỀU HƯỚNG TỔNG QUAN CHUYÊN NGHIỆP */}
+          {/* 3 THẺ ĐIỀU HƯỚNG TỔNG QUAN */}
           <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
             
             <div 
