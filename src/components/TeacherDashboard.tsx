@@ -48,23 +48,24 @@ import { deleteSubmissionFromCloud, clearAllSubmissionsFromCloud } from '../serv
 export type DashboardPanel = 'panel1' | 'panel2' | 'panel3' | 'panel4' | 'panel5' | 'panel6' | 'overview' | 'config' | 'ai_tools' | 'monitoring' | 'admin';
 
 interface TeacherDashboardProps {
-  exam: Exam;
-  onUpdateExam: (updatedExam: Exam) => void;
-  onPreviewAsStudent: () => void;
-  bundle: ExamVariantBundle | null;
-  onApplyBundle: (newBundle: ExamVariantBundle) => void;
-  onOpenPrint: (mode: 'exam_only' | 'exam_with_solutions') => void;
+  exam?: Exam;
+  currentExam?: Exam;
+  onUpdateExam?: (updatedExam: Exam) => void;
+  onPreviewAsStudent?: () => void;
+  bundle?: ExamVariantBundle | null;
+  onApplyBundle?: (newBundle: ExamVariantBundle) => void;
+  onOpenPrint?: (mode: 'exam_only' | 'exam_with_solutions') => void;
   onOpenPrintMatrix?: (bundle: ExamVariantBundle) => void;
-  onOpenTeacherJsonModal: () => void;
-  antiCheatConfig: AntiCheatConfig;
-  onChangeAntiCheatConfig: (newConfig: AntiCheatConfig) => void;
-  submissions: StudentSubmission[];
+  onOpenTeacherJsonModal?: () => void;
+  antiCheatConfig?: AntiCheatConfig;
+  onChangeAntiCheatConfig?: (newConfig: AntiCheatConfig) => void;
+  submissions?: StudentSubmission[];
   onAddSampleSubmission?: () => void;
   onClearSubmissions?: () => void;
   onDeleteSubmission?: (id: string) => void;
   availableCodes?: string[];
-  activeCode: string;
-  onSelectExamCode: (code: string) => void;
+  activeCode?: string;
+  onSelectExamCode?: (code: string) => void;
   examPackages?: ExamPackage[];
   onSaveExamPackage?: (pkg: ExamPackage) => void;
   onDeleteExamPackage?: (pkgId: string) => void;
@@ -79,28 +80,29 @@ interface TeacherDashboardProps {
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
-  exam,
-  onUpdateExam,
-  onPreviewAsStudent,
-  bundle,
-  onApplyBundle,
-  onOpenPrint,
+  exam: propExam,
+  currentExam: propCurrentExam,
+  onUpdateExam = () => {},
+  onPreviewAsStudent = () => {},
+  bundle = null,
+  onApplyBundle = () => {},
+  onOpenPrint = () => {},
   onOpenPrintMatrix,
-  onOpenTeacherJsonModal,
-  antiCheatConfig,
-  onChangeAntiCheatConfig,
-  submissions,
+  onOpenTeacherJsonModal = () => {},
+  antiCheatConfig = { enabled: true, maxViolations: 5 } as any,
+  onChangeAntiCheatConfig = () => {},
+  submissions = [],
   onAddSampleSubmission,
   onClearSubmissions,
   onDeleteSubmission,
-  availableCodes,
-  activeCode,
-  onSelectExamCode,
-  examPackages: externalPackages,
+  availableCodes = ['101'],
+  activeCode = '101',
+  onSelectExamCode = () => {},
+  examPackages: externalPackages = [],
   onSaveExamPackage,
   onDeleteExamPackage,
   onOpenSaveToBank,
-  assignments: externalAssignments,
+  assignments: externalAssignments = [],
   onAssignExam,
   onSelectExamPackage,
   onDeleteAssignment,
@@ -108,6 +110,27 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   initialSubtabIndex,
   onNavigateHome,
 }) => {
+  // Lớp phòng vệ an toàn tuyệt đối cho exam và questions
+  const safeExam: Exam = useMemo(() => {
+    const raw = propExam || propCurrentExam;
+    if (raw && Array.isArray(raw.questions)) {
+      return raw;
+    }
+    return {
+      id: raw?.id || 'exam-fallback',
+      code: raw?.code || '101',
+      title: raw?.title || 'Đề thi Khảo thí Vật lí',
+      subtitle: raw?.subtitle || '',
+      durationMinutes: raw?.durationMinutes || 45,
+      totalPoints: raw?.totalPoints || 10,
+      questions: Array.isArray(raw?.questions) ? raw.questions : []
+    } as any;
+  }, [propExam, propCurrentExam]);
+
+  const safeQuestions: Question[] = useMemo(() => {
+    return Array.isArray(safeExam?.questions) ? safeExam.questions : [];
+  }, [safeExam]);
+
   // Panel hiện tại của Dashboard
   const resolvePanel = (p?: DashboardPanel): DashboardPanel => {
     if (!p) return 'panel1';
@@ -134,7 +157,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [wordParseResult, setWordParseResult] = useState<WordExamParseResult | null>(null);
   const [wordParseError, setWordParseError] = useState<string | null>(null);
 
-  // Đồng bộ khi initialPanel hoặc initialSubtabIndex thay đổi từ bên ngoài
   useEffect(() => {
     if (initialPanel) {
       const resolved = resolvePanel(initialPanel);
@@ -158,14 +180,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   }, [initialPanel, initialSubtabIndex]);
 
-  // Trạng thái mở modal Lưu đề thi vào Ngân hàng
   const [isSaveExamModalOpen, setIsSaveExamModalOpen] = useState<boolean>(false);
-
-  // Quản lý gói đề thi trong state & localStorage
   const [localPackages, setLocalPackages] = useState<ExamPackage[]>(() => getSavedExamPackages());
   const allPackages = externalPackages && externalPackages.length > 0 ? externalPackages : localPackages;
 
-  // Quản lý danh sách bài thi đã giao
   const [localAssignments, setLocalAssignments] = useState<ExamAssignmentInfo[]>(() => {
     try {
       const raw = localStorage.getItem('physixam_assignments');
@@ -173,82 +191,65 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     } catch {}
     return [];
   });
-  const allAssignments = externalAssignments || localAssignments;
+  const allAssignments = (externalAssignments && externalAssignments.length > 0) ? externalAssignments : localAssignments;
 
-  // Chế độ xem trong Panel 1
   const [panel1ViewMode, setPanel1ViewMode] = useState<'curriculum_bank' | 'current_exam_questions' | 'assigned_management'>('curriculum_bank');
-
-  // Bộ lọc cho Ngân hàng đề thi
   const [filterGrade, setFilterGrade] = useState<GradeLevel | 'all'>('all');
   const [filterCategory, setFilterCategory] = useState<ExamCategory | 'all'>('all');
   const [filterChapterId, setFilterChapterId] = useState<string>('all');
   const [filterLessonId, setFilterLessonId] = useState<string>('all');
   const [filterSearch, setFilterSearch] = useState<string>('');
 
-  // Hộp thoại Giao đề thi
   const [assigningPackage, setAssigningPackage] = useState<ExamPackage | null>(null);
-
-  // Lọc câu hỏi ở Tab chi tiết
   const [selectedPartFilter, setSelectedPartFilter] = useState<'all' | 'Phần I' | 'Phần II' | 'Phần III'>('all');
   const [selectedCognitiveLevelFilter, setSelectedCognitiveLevelFilter] = useState<'all' | 'NB' | 'TH' | 'VD' | 'VDC'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
   const [selectedDiagramSourceId, setSelectedDiagramSourceId] = useState<string | null>(null);
 
-  // Xem chi tiết bài nộp & bộ lọc ở Panel 4
   const [inspectingSubmission, setInspectingSubmission] = useState<StudentSubmission | null>(null);
   const [submissionFilter, setSubmissionFilter] = useState<'all' | 'submitted' | 'violated'>('all');
   const [studentSearch, setStudentSearch] = useState<string>('');
 
-  // Thông báo nhanh
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-// Xóa 1 bài nộp cụ thể (Vấn đề 3)
   const handleDeleteSingleSubmission = async (sub: StudentSubmission) => {
-    if (window.confirm(`Thầy có chắc chắn muốn xóa bài thi của thí sinh: "${sub.studentName}" (SBD: ${sub.candidateNumber}) không?`)) {
+    if (!sub) return;
+    const name = sub.studentName || 'Thí sinh';
+    const sbd = sub.candidateNumber || '';
+    if (window.confirm(`Thầy có chắc chắn muốn xóa bài thi của thí sinh: "${name}" (SBD: ${sbd}) không?`)) {
       const targetId = (sub as any).id || (sub as any)._id;
-
-      // 1. Gọi trực tiếp hàm xóa của App.tsx để cập nhật danh sách ngay lập tức
-      if (onDeleteSubmission) {
+      if (onDeleteSubmission && targetId) {
         onDeleteSubmission(targetId);
       }
-
-      // 2. Xóa trên Cloud / MongoDB Atlas
       try {
-        await deleteSubmissionFromCloud(targetId);
+        if (targetId) await deleteSubmissionFromCloud(targetId);
       } catch (e) {
         console.warn('Lỗi khi xóa trên cloud:', e);
       }
-
-      showToast(`Đã xóa bài thi của thí sinh "${sub.studentName}" thành công!`);
+      showToast(`Đã xóa bài thi của thí sinh "${name}" thành công!`);
     }
   };
 
-  // Xóa toàn bộ danh sách kết quả bài nộp (Vấn đề 3)
   const handleClearAllSubmissions = async () => {
-    if (submissions.length === 0) return;
+    if (!submissions || submissions.length === 0) return;
     if (window.confirm(`CẢNH BÁO: Thầy có chắc chắn muốn XÓA TOÀN BỘ ${submissions.length} bài thi của học sinh không? Dữ liệu trên hệ thống sẽ bị xóa vĩnh viễn!`)) {
-      // 1. Xóa sạch trên App.tsx
       if (onClearSubmissions) {
         onClearSubmissions();
       }
-
-      // 2. Xóa sạch trên Cloud
       try {
         await clearAllSubmissionsFromCloud();
       } catch (e) {
         console.warn('Lỗi khi xóa sạch cloud:', e);
       }
-
       showToast('Đã xóa sạch toàn bộ danh sách thí sinh nộp bài thành công!');
     }
   };
 
-  // Lưu gói đề thi mới hoặc cập nhật
   const handleSavePackage = (newPkg: ExamPackage) => {
     if (onSaveExamPackage) {
       onSaveExamPackage(newPkg);
@@ -269,7 +270,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     showToast(`Đã lưu thành công đề thi '${newPkg.title}' vào Ngân hàng đề (Khối ${newPkg.grade})!`);
   };
 
-  // Xóa gói đề thi khỏi Ngân hàng đề thi GDPT 2018
   const handleDeleteExamPackage = (pkgId: string) => {
     if (onDeleteExamPackage) {
       onDeleteExamPackage(pkgId);
@@ -334,36 +334,38 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   };
 
   const partStats = useMemo(() => {
-    const part1 = exam.questions.filter((q) => q.part === 'Phần I').length;
-    const part2 = exam.questions.filter((q) => q.part === 'Phần II').length;
-    const part3 = exam.questions.filter((q) => q.part === 'Phần III').length;
-    return { part1, part2, part3, total: exam.questions.length };
-  }, [exam.questions]);
+    const part1 = safeQuestions.filter((q) => q?.part === 'Phần I').length;
+    const part2 = safeQuestions.filter((q) => q?.part === 'Phần II').length;
+    const part3 = safeQuestions.filter((q) => q?.part === 'Phần III').length;
+    return { part1, part2, part3, total: safeQuestions.length };
+  }, [safeQuestions]);
 
   const cognitiveStats = useMemo(() => {
     let nb = 0;
     let th = 0;
     let vd = 0;
     let vdc = 0;
-    exam.questions.forEach((q) => {
+    safeQuestions.forEach((q) => {
+      if (!q) return;
       const lvl = getQuestionCognitiveLevel(q);
       if (lvl === 'NB') nb++;
       else if (lvl === 'TH') th++;
       else if (lvl === 'VD') vd++;
       else if (lvl === 'VDC') vdc++;
     });
-    return { nb, th, vd, vdc, total: exam.questions.length };
-  }, [exam.questions]);
+    return { nb, th, vd, vdc, total: safeQuestions.length };
+  }, [safeQuestions]);
 
   const filteredQuestions = useMemo(() => {
-    return exam.questions.filter((q) => {
+    return safeQuestions.filter((q) => {
+      if (!q) return false;
       if (selectedPartFilter !== 'all' && q.part !== selectedPartFilter) {
         return false;
       }
       if (selectedCognitiveLevelFilter !== 'all') {
         const qLevel = getQuestionCognitiveLevel(q);
         if (q.type === 'true_false_cluster') {
-          const hasMatchingStatement = q.items.some((item, idx) => getStatementCognitiveLevel(item, idx) === selectedCognitiveLevelFilter);
+          const hasMatchingStatement = Array.isArray(q.items) && q.items.some((item, idx) => getStatementCognitiveLevel(item, idx) === selectedCognitiveLevelFilter);
           if (qLevel !== selectedCognitiveLevelFilter && !hasMatchingStatement) {
             return false;
           }
@@ -373,43 +375,46 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       }
       if (searchQuery.trim().length > 0) {
         const query = searchQuery.toLowerCase();
-        const matchTitle = q.title.toLowerCase().includes(query);
-        const matchStem = q.stem.toLowerCase().includes(query);
-        const matchTopic = q.topic.toLowerCase().includes(query);
+        const matchTitle = (q.title || '').toLowerCase().includes(query);
+        const matchStem = (q.stem || '').toLowerCase().includes(query);
+        const matchTopic = (q.topic || '').toLowerCase().includes(query);
         if (!matchTitle && !matchStem && !matchTopic) {
           return false;
         }
       }
       return true;
     });
-  }, [exam.questions, selectedPartFilter, selectedCognitiveLevelFilter, searchQuery]);
+  }, [safeQuestions, selectedPartFilter, selectedCognitiveLevelFilter, searchQuery]);
 
   const submissionStats = useMemo(() => {
-    const total = submissions.length;
+    const safeSubs = Array.isArray(submissions) ? submissions : [];
+    const total = safeSubs.length;
     if (total === 0) return { total: 0, avgScore: 0, passRate: 0, violatedCount: 0 };
-    const totalScore = submissions.reduce((acc, s) => acc + s.totalScore, 0);
+    const totalScore = safeSubs.reduce((acc, s) => acc + (s?.totalScore || 0), 0);
     const avgScore = totalScore / total;
-    const passCount = submissions.filter((s) => s.totalScore >= 5.0).length;
+    const passCount = safeSubs.filter((s) => (s?.totalScore || 0) >= 5.0).length;
     const passRate = Math.round((passCount / total) * 100);
-    const violatedCount = submissions.filter(
-      (s) => s.violationCount > 0 || s.submissionReason === 'violation_limit_exceeded'
+    const violatedCount = safeSubs.filter(
+      (s) => (s?.violationCount || 0) > 0 || s?.submissionReason === 'violation_limit_exceeded'
     ).length;
     return { total, avgScore: Number(avgScore.toFixed(2)), passRate, violatedCount };
   }, [submissions]);
 
   const filteredSubmissions = useMemo(() => {
-    return submissions.filter((sub) => {
+    const safeSubs = Array.isArray(submissions) ? submissions : [];
+    return safeSubs.filter((sub) => {
+      if (!sub) return false;
       if (submissionFilter === 'submitted' && sub.submissionReason === 'violation_limit_exceeded') {
         return false;
       }
-      if (submissionFilter === 'violated' && sub.submissionReason !== 'violation_limit_exceeded' && sub.violationCount === 0) {
+      if (submissionFilter === 'violated' && sub.submissionReason !== 'violation_limit_exceeded' && (sub.violationCount || 0) === 0) {
         return false;
       }
       if (studentSearch.trim().length > 0) {
         const q = studentSearch.toLowerCase();
-        const matchName = sub.studentName.toLowerCase().includes(q);
-        const matchClass = sub.studentClass.toLowerCase().includes(q);
-        const matchSbd = sub.candidateNumber.toLowerCase().includes(q);
+        const matchName = (sub.studentName || '').toLowerCase().includes(q);
+        const matchClass = (sub.studentClass || '').toLowerCase().includes(q);
+        const matchSbd = (sub.candidateNumber || '').toLowerCase().includes(q);
         if (!matchName && !matchClass && !matchSbd) {
           return false;
         }
@@ -419,7 +424,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   }, [submissions, submissionFilter, studentSearch]);
 
   const scoreDistributionData = useMemo(() => {
-    const scores = submissions.map((s) => s.totalScore);
+    const safeSubs = Array.isArray(submissions) ? submissions : [];
+    const scores = safeSubs.map((s) => s?.totalScore || 0);
     const total = scores.length;
     if (total === 0) {
       return {
@@ -486,14 +492,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   }, [submissions]);
 
   const questionMistakeAnalytics = useMemo(() => {
-    const totalSubs = submissions.length;
-    return exam.questions.map((q, idx) => {
+    const safeSubs = Array.isArray(submissions) ? submissions : [];
+    const totalSubs = safeSubs.length;
+    return safeQuestions.map((q, idx) => {
       const qNum = idx + 1;
       let correctCount = 0;
       const wrongChoiceCounts: Record<string, number> = { A: 0, B: 0, C: 0, D: 0 };
       let wrongOtherCount = 0;
 
-      submissions.forEach((sub) => {
+      safeSubs.forEach((sub) => {
+        if (!sub) return;
         const res = (sub.evaluation?.results as any)?.[q.id];
         if (res?.isCorrect) {
           correctCount++;
@@ -536,7 +544,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         wrongSummary,
       };
     });
-  }, [exam.questions, submissions]);
+  }, [safeQuestions, submissions]);
 
   const handleUpdateAntiCheat = <K extends keyof AntiCheatConfig>(key: K, value: AntiCheatConfig[K]) => {
     const updated = { ...antiCheatConfig, [key]: value };
@@ -637,18 +645,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap text-2xs">
               <span className="font-bold text-slate-900 text-xs sm:text-sm truncate max-w-[280px] sm:max-w-md">
-                {exam.title}
+                {safeExam.title}
               </span>
               <span className="px-2 py-0.5 rounded-md font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                {exam.gradeLevel ? exam.gradeLevel.replace(/\s*\(?Chương trình GDPT 2018\)?/gi, '').trim() : 'Lớp 12'}
+                {safeExam.gradeLevel ? safeExam.gradeLevel.replace(/\s*\(?Chương trình GDPT 2018\)?/gi, '').trim() : 'Lớp 12'}
               </span>
               <span className="px-2 py-0.5 rounded-md font-mono font-bold bg-slate-100 text-slate-700">
                 Mã: {activeCode}
               </span>
               <span className="text-slate-500 font-medium">
-                • {partStats.total} câu ({exam.durationMinutes} phút)
+                • {partStats.total} câu ({safeExam.durationMinutes || 45} phút)
               </span>
-              {antiCheatConfig.enabled && (
+              {antiCheatConfig?.enabled && (
                 <span className="px-2 py-0.5 rounded-md font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
                   <ShieldCheck className="w-3 h-3 text-emerald-600" />
                   Giám sát bật
@@ -692,7 +700,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       </div>
 
-      {/* THANH ĐIỀU HƯỚNG 5 PANEL TRUNG TÂM */}
+      {/* THANH ĐIỀU HƯỚNG 6 PANEL TRUNG TÂM */}
       <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1">
           <button
@@ -727,7 +735,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <span className={`px-2 py-0.5 rounded-full text-2xs ${
               activePanel === 'panel2' || activePanel === 'ai_tools' ? 'bg-sky-700 text-sky-100' : 'bg-slate-200 text-slate-700'
             }`}>
-              {exam.questions.length} câu
+              {safeQuestions.length} câu
             </span>
           </button>
 
@@ -846,7 +854,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 <span className={`px-2 py-0.5 rounded-full text-2xs font-bold ${
                   panel1ViewMode === 'current_exam_questions' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-800'
                 }`}>
-                  {exam.questions.length} câu
+                  {safeQuestions.length} câu
                 </span>
               </button>
             </div>
@@ -865,7 +873,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
           {panel1ViewMode === 'curriculum_bank' ? (
             <CurriculumExamBank
-              currentExam={exam}
+              currentExam={safeExam}
               packages={allPackages}
               assignments={allAssignments}
               onSelectPackage={handleSelectPackageAsActive}
@@ -892,15 +900,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       Mã {activeCode}
                     </span>
                   </div>
-                  <h3 className="text-base sm:text-lg font-black text-white">{exam.title}</h3>
-                  <p className="text-xs text-slate-300 mt-0.5">{exam.subtitle} • {exam.durationMinutes} phút • Thang {exam.totalPoints}đ</p>
+                  <h3 className="text-base sm:text-lg font-black text-white">{safeExam.title}</h3>
+                  <p className="text-xs text-slate-300 mt-0.5">{safeExam.subtitle} • {safeExam.durationMinutes || 45} phút • Thang {safeExam.totalPoints || 10}đ</p>
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
                     onClick={() => setIsSaveExamModalOpen(true)}
-                    className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs shadow-md shadow-amber-500/25 transition flex items-center gap-1.5 cursor-pointer"
+                    className="px-3.5 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-slate-950 font-black text-xs shadow-md shadow-amber-500/25 transition flex items-center gap-1.5 cursor-pointer"
                   >
                     <BookmarkCheck className="w-3.5 h-3.5 text-slate-950" />
                     <span>💾 Lưu đề này vào Ngân hàng</span>
@@ -909,27 +917,27 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      const matched = allPackages.find((p) => p.code === activeCode || p.title === exam.title);
+                      const matched = allPackages.find((p) => p.code === activeCode || p.title === safeExam.title);
                       if (matched) {
                         setAssigningPackage(matched);
                       } else {
                         const tempPkg: ExamPackage = {
-                          id: exam.id,
+                          id: safeExam.id || 'temp-exam',
                           grade: 12,
                           category: 'survey',
                           categoryLabel: 'Chuẩn Bộ GD&ĐT',
                           chapterId: '12-c1',
                           chapterTitle: 'Chương 1: Vật lí nhiệt & Sóng - Điện',
                           code: activeCode,
-                          title: exam.title,
-                          subtitle: exam.subtitle,
-                          durationMinutes: exam.durationMinutes,
-                          totalPoints: exam.totalPoints,
+                          title: safeExam.title,
+                          subtitle: safeExam.subtitle,
+                          durationMinutes: safeExam.durationMinutes || 45,
+                          totalPoints: safeExam.totalPoints || 10,
                           difficulty: 'Chuẩn Bộ GD&ĐT',
                           tags: ['Bộ GD&ĐT', 'KaTeX', 'SVG'],
-                          svgCount: exam.questions.filter((q) => q.diagram?.type === 'svg').length,
-                          katexCount: exam.questions.filter((q) => q.stem.includes('$')).length,
-                          examData: exam,
+                          svgCount: safeQuestions.filter((q) => q?.diagram?.type === 'svg').length,
+                          katexCount: safeQuestions.filter((q) => (q?.stem || '').includes('$')).length,
+                          examData: safeExam,
                           createdAt: new Date().toISOString().slice(0, 10),
                         };
                         setAssigningPackage(tempPkg);
@@ -981,32 +989,33 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               {/* Danh sách câu hỏi */}
               <div className="space-y-4">
                 {filteredQuestions.map((q, idx) => {
+                  if (!q) return null;
                   const isExpanded = expandedQuestionId === q.id;
-                  const originalIndex = exam.questions.findIndex((item) => item.id === q.id);
+                  const originalIndex = safeQuestions.findIndex((item) => item?.id === q.id);
                   const qLevel = getQuestionCognitiveLevel(q);
 
                   return (
-                    <div key={q.id} className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                    <div key={q.id || idx} className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
                       <div className="p-4 sm:p-5 flex items-center justify-between border-b border-slate-100 bg-slate-50/50">
                         <div className="flex items-center gap-2.5">
                           <span className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-800 font-black text-xs flex items-center justify-center">
-                            {originalIndex + 1}
+                            {originalIndex >= 0 ? originalIndex + 1 : idx + 1}
                           </span>
-                          <span className="text-xs font-bold text-slate-800">{q.title}</span>
+                          <span className="text-xs font-bold text-slate-800">{q.title || `Câu ${idx + 1}`}</span>
                           <span className="px-2 py-0.5 rounded-full text-3xs font-bold bg-slate-200 text-slate-700">
-                            {q.part}
+                            {q.part || 'Phần I'}
                           </span>
                           <CognitiveLevelBadge level={qLevel} showFullName={true} />
                         </div>
                         <button
                           onClick={() => setExpandedQuestionId(isExpanded ? null : q.id)}
-                          className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700"
+                          className="px-3 py-1.5 rounded-xl bg-white hover:bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer"
                         >
                           {isExpanded ? 'Thu gọn' : 'Xem chi tiết'}
                         </button>
                       </div>
                       <div className="p-5 text-sm text-slate-800">
-                        <MathRenderer content={stripCognitiveLevelPrefix(q.stem)} />
+                        <MathRenderer content={stripCognitiveLevelPrefix(q.stem || '')} />
                       </div>
                     </div>
                   );
@@ -1101,7 +1110,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   <button
                     type="button"
                     onClick={handleApplyWordExam}
-                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2"
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 cursor-pointer"
                   >
                     <Check className="w-4 h-4" />
                     <span>Áp dụng vào đề thi hiện tại</span>
@@ -1114,7 +1123,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           {panel2Tab === 'visual_editor' && (
             <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs">
               <TeacherEditor
-                currentExam={exam}
+                currentExam={safeExam}
                 onUpdateExam={(newExam) => {
                   onUpdateExam(newExam);
                   showToast('Đã lưu các thay đổi câu hỏi vào đề thi hiện tại!');
@@ -1128,9 +1137,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           {panel2Tab === 'ai_scan' && (
             <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs">
               <AIGeneratorTab
-                currentExam={exam}
+                currentExam={safeExam}
                 onAppendQuestions={(newQuestions) => {
-                  const updated = { ...exam, questions: [...exam.questions, ...newQuestions] };
+                  const updated = { ...safeExam, questions: [...safeQuestions, ...newQuestions] };
                   onUpdateExam(updated);
                   showToast(`Đã thêm thành công ${newQuestions.length} câu hỏi mới từ AI!`);
                 }}
@@ -1182,7 +1191,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           {panel3Tab === 'shuffling' && (
             <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-xs">
               <ShufflingTab
-                currentExam={exam}
+                currentExam={safeExam}
                 onApplyBundle={onApplyBundle}
                 onOpenPrintMatrix={onOpenPrintMatrix}
               />
@@ -1254,7 +1263,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 {submissions.length} bài nộp đã lưu
               </span>
               
-              {/* Nút Xóa toàn bộ kết quả thí sinh (Vấn đề 3) */}
+              {/* Nút Xóa toàn bộ kết quả thí sinh */}
               {submissions.length > 0 && (
                 <button
                   type="button"
@@ -1315,7 +1324,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   </div>
                   <div className="flex items-center gap-2 mt-2">
                     <button
-                      onClick={() => exportGradebookToExcel(submissions, exam.title)}
+                      onClick={() => exportGradebookToExcel(submissions, safeExam.title)}
                       disabled={submissions.length === 0}
                       className="flex-1 py-2 px-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition flex items-center justify-center gap-1 disabled:opacity-50 cursor-pointer"
                     >
@@ -1323,7 +1332,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       <span>Tải Excel (.xlsx)</span>
                     </button>
                     <button
-                      onClick={() => exportAllSubmissionsToCSV(submissions, exam.title)}
+                      onClick={() => exportAllSubmissionsToCSV(submissions, safeExam.title)}
                       disabled={submissions.length === 0}
                       className="py-2 px-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-200 transition flex items-center justify-center gap-1 disabled:opacity-50 cursor-pointer"
                       title="Xuất CSV"
@@ -1405,7 +1414,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         </tr>
                       ) : (
                         filteredSubmissions.map((sub) => {
-                          const isAutoPenalized = sub.submissionReason === 'violation_limit_exceeded';
+                          const isAutoPenalized = sub?.submissionReason === 'violation_limit_exceeded';
 
                           return (
                             <tr key={sub.id} className="hover:bg-slate-50/80 transition">
@@ -1424,7 +1433,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
                               <td className="py-3 px-4">
                                 <div className="font-black text-sm text-indigo-700">
-                                  {sub.totalScore.toFixed(2)}đ
+                                  {(sub.totalScore || 0).toFixed(2)}đ
                                 </div>
                                 <div className="text-3xs text-slate-400">{sub.percentage}%</div>
                               </td>
@@ -1432,7 +1441,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                               <td className="py-3 px-4">
                                 <div className="text-slate-700 font-medium">{sub.submittedAt}</div>
                                 <div className="text-3xs text-slate-400">
-                                  Làm trong: {Math.floor(sub.timeSpentSeconds / 60)}p {sub.timeSpentSeconds % 60}s
+                                  Làm trong: {Math.floor((sub.timeSpentSeconds || 0) / 60)}p {(sub.timeSpentSeconds || 0) % 60}s
                                 </div>
                               </td>
 
@@ -1455,7 +1464,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                               </td>
 
                               <td className="py-3 px-4">
-                                {sub.violationCount === 0 ? (
+                                {(sub.violationCount || 0) === 0 ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-3xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                                     <ShieldCheck className="w-3 h-3 text-emerald-600" />
                                     0 vi phạm (Tuân thủ)
@@ -1485,7 +1494,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
                                 <button
                                   onClick={() =>
-                                    exportScoreReportToCSV(exam, sub.evaluation, {
+                                    exportScoreReportToCSV(safeExam, sub.evaluation, {
                                       name: sub.studentName,
                                       studentClass: sub.studentClass,
                                       candidateNumber: sub.candidateNumber,
@@ -1497,7 +1506,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                                   CSV
                                 </button>
 
-                                {/* Nút Xóa 1 thí sinh cụ thể (Vấn đề 3) */}
+                                {/* Nút Xóa 1 thí sinh cụ thể */}
                                 <button
                                   type="button"
                                   onClick={() => handleDeleteSingleSubmission(sub)}
@@ -1518,7 +1527,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             </div>
           )}
 
-          {/* Subtab 4.2 & 4.3 giữ nguyên như ban đầu */}
+          {/* Subtab 4.2: Thống kê phổ điểm */}
           {panel4Tab === 'distribution' && (
             <div className="space-y-6">
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
@@ -1575,6 +1584,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             </div>
           )}
 
+          {/* Subtab 4.3: Xuất báo cáo */}
           {panel4Tab === 'export_report' && (
             <div className="space-y-6">
               <div className="bg-gradient-to-r from-emerald-800 via-teal-900 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl flex items-center justify-between">
@@ -1584,9 +1594,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() => exportGradebookToExcel(submissions, exam.title)}
+                  onClick={() => exportGradebookToExcel(submissions, safeExam.title)}
                   disabled={submissions.length === 0}
-                  className="py-3 px-5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs flex items-center gap-2"
+                  className="py-3 px-5 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs flex items-center gap-2 cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
                   <span>Tải Excel (.xlsx)</span>
@@ -1601,17 +1611,19 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
                 <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
                   <h4 className="font-bold text-sm">Nhật ký Giám sát: {inspectingSubmission.studentName}</h4>
-                  <button onClick={() => setInspectingSubmission(null)} className="text-slate-400 hover:text-white">
+                  <button onClick={() => setInspectingSubmission(null)} className="text-slate-400 hover:text-white cursor-pointer">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-6 space-y-3 text-xs">
-                  {inspectingSubmission.auditLog.violations.map((v, i) => (
+                  {inspectingSubmission.auditLog?.violations?.map((v, i) => (
                     <div key={v.id || i} className="p-3 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between">
-                      <span className="font-bold text-rose-900">{i + 1}. {v.reason}</span>
+                      <span className="font-bold text-rose-900">{i + 1}. {v.reason || (v as any).description}</span>
                       <span className="font-mono text-3xs text-rose-700">{v.timestamp}</span>
                     </div>
-                  ))}
+                  )) || (
+                    <div className="text-slate-400 text-center py-4">Không có nhật ký vi phạm nào.</div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1628,7 +1640,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex items-center justify-between">
             <button
               onClick={() => onOpenPrint('exam_only')}
-              className="px-5 py-3 rounded-2xl bg-purple-600 text-white font-bold text-xs flex items-center gap-2"
+              className="px-5 py-3 rounded-2xl bg-purple-600 text-white font-bold text-xs flex items-center gap-2 cursor-pointer"
             >
               <Printer className="w-4 h-4" />
               <span>In đề thi chuẩn A4</span>
@@ -1647,7 +1659,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         <SaveExamToBankModal
           isOpen={isSaveExamModalOpen}
           onClose={() => setIsSaveExamModalOpen(false)}
-          currentExam={exam}
+          currentExam={safeExam}
           onSaveExamToBank={handleSavePackage}
         />
       )}
