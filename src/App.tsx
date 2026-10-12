@@ -6,8 +6,9 @@ import { TeacherDashboard } from './components/TeacherDashboard';
 import { safeStorage } from './utils/safeStorage';
 import { ExamPackage, ExamAssignmentInfo } from './types/curriculum';
 import { 
-  LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
-  Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, UploadCloud
+  Home, LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
+  Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, 
+  UploadCloud, ArrowRight, BookOpen, ShieldCheck, Layers
 } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
@@ -52,16 +53,16 @@ const DEFAULT_EXAM: Exam = {
 
 const DEFAULT_BRANDING = {
   schoolName: 'HỆ THỐNG KHẢO THÍ VẬT LÍ TRỰC TUYẾN',
-  subtitle: 'CHƯƠNG TRÌNH GIÁO DỤC PHỔ THÔNG 2018 • PHÂN HÓA NĂNG LỰC HỌC SINH',
+  subtitle: 'CHƯƠNG TRÌNH GIÁO DỤC PHỔ THÔNG 2018 • ĐÁNH GIÁ NĂNG LỰC HỌC SINH',
   logoUrl: '',
   bannerUrl: 'https://images.unsplash.com/photo-1507413245164-6160d8298b31?q=80&w=2070&auto=format&fit=crop'
 };
 
 export default function App() {
-  const [appMode, setAppMode] = useState<'student' | 'teacher' | 'print'>('teacher');
+  // Chế độ hiển thị: 'home' (Trang chủ Pano) | 'teacher' | 'student' | 'print'
+  const [appMode, setAppMode] = useState<'home' | 'student' | 'teacher' | 'print'>('home');
   const [activePrintMode, setActivePrintMode] = useState<'exam_only' | 'exam_with_solutions' | 'matrix'>('exam_only');
 
-  // Khởi tạo Branding (Logo & Pano Banner)
   const [branding, setBranding] = useState(() => {
     try {
       const saved = localStorage.getItem('physixam_branding');
@@ -170,10 +171,9 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.warn('Không thể kết nối API MongoDB Atlas (sử dụng dữ liệu offline):', err);
+        console.warn('Không thể kết nối API MongoDB Atlas (dùng dữ liệu offline):', err);
       }
     };
-
     fetchSubmissionsFromMongo();
   }, []);
 
@@ -201,7 +201,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [studentExamPhase, appMode]);
 
-  // Lưu cấu hình Branding
   const handleSaveBranding = () => {
     setBranding(brandingDraft);
     try {
@@ -234,9 +233,7 @@ export default function App() {
       } else {
         localStorage.setItem('physixam_bundle', serialized);
       }
-    } catch (e) {
-      console.warn('Lỗi lưu gói mã đề trộn:', e);
-    }
+    } catch (e) {}
 
     const firstVariant: any = newBundle.variants[0];
     const targetExam: Exam = firstVariant?.examData || firstVariant;
@@ -259,7 +256,6 @@ export default function App() {
           setFlaggedQuestionIds(new Set());
           setCurrentQuestionIndex(0);
           setTimeRemainingSeconds(((targetExam as any).durationMinutes || 45) * 60);
-          return;
         }
       }
     }
@@ -268,24 +264,14 @@ export default function App() {
   const handleLoadExamFromBank = (selectedPkg: ExamPackage) => {
     if (!selectedPkg || !selectedPkg.examData) return;
     const targetExam = selectedPkg.examData;
-    
     setExam(targetExam);
     setActiveCode(targetExam.code || selectedPkg.code || '101');
     setBundle(null);
     try {
       localStorage.removeItem('physixam_bundle');
-    } catch (e) {}
-    
-    try {
       const serialized = JSON.stringify(targetExam);
-      if (safeStorage?.setItem) {
-        safeStorage.setItem('physixam_current_exam', serialized);
-      } else {
-        localStorage.setItem('physixam_current_exam', serialized);
-      }
-    } catch (e) {
-      console.warn('Lỗi lưu đề nạp từ ngân hàng:', e);
-    }
+      safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', serialized) : localStorage.setItem('physixam_current_exam', serialized);
+    } catch (e) {}
 
     setAnswers({});
     setFlaggedQuestionIds(new Set());
@@ -300,11 +286,7 @@ export default function App() {
     if (updatedExam.code) setActiveCode(updatedExam.code);
     try {
       const serialized = JSON.stringify(updatedExam);
-      if (safeStorage?.setItem) {
-        safeStorage.setItem('physixam_current_exam', serialized);
-      } else {
-        localStorage.setItem('physixam_current_exam', serialized);
-      }
+      safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', serialized) : localStorage.setItem('physixam_current_exam', serialized);
     } catch (e) {}
   };
 
@@ -344,10 +326,7 @@ export default function App() {
     });
 
     handleLoadExamFromBank(pkg);
-
-    if (switchToStudent) {
-      setAppMode('student');
-    }
+    if (switchToStudent) setAppMode('student');
   };
 
   const handleDeleteAssignment = (assignId: string) => {
@@ -369,11 +348,8 @@ export default function App() {
     if (!questionId) return;
     setFlaggedQuestionIds((prev) => {
       const next = new Set(prev);
-      if (next.has(questionId)) {
-        next.delete(questionId);
-      } else {
-        next.add(questionId);
-      }
+      if (next.has(questionId)) next.delete(questionId);
+      else next.add(questionId);
       return next;
     });
   };
@@ -406,9 +382,7 @@ export default function App() {
         const clusterAns = userAns || {};
         let correctSubCount = 0;
         q.items?.forEach((item: any) => {
-          if ((clusterAns as any)[item.id] === item.isCorrect) {
-            correctSubCount++;
-          }
+          if ((clusterAns as any)[item.id] === item.isCorrect) correctSubCount++;
         });
         if (correctSubCount === (q.items?.length || 1)) {
           isCorrect = true;
@@ -425,19 +399,11 @@ export default function App() {
       }
 
       score += pointsAwarded;
-      detailedFeedback.push({
-        questionId: q.id,
-        isCorrect,
-        pointsAwarded
-      });
+      detailedFeedback.push({ questionId: q.id, isCorrect, pointsAwarded });
     });
 
     const finalScore = Number(Math.min(10, Math.max(0, score)).toFixed(2));
-    const evalResult = {
-      totalScore: finalScore,
-      detailedFeedback
-    };
-
+    const evalResult = { totalScore: finalScore, detailedFeedback };
     setEvaluation(evalResult);
 
     const safeExamCode = exam?.code || activeCode || '101';
@@ -462,11 +428,7 @@ export default function App() {
     setSubmissions((prev) => {
       const updated = [newSub, ...(prev || [])];
       try {
-        if (safeStorage?.setItem) {
-          safeStorage.setItem('physixam_submissions', JSON.stringify(updated));
-        } else {
-          localStorage.setItem('physixam_submissions', JSON.stringify(updated));
-        }
+        safeStorage?.setItem ? safeStorage.setItem('physixam_submissions', JSON.stringify(updated)) : localStorage.setItem('physixam_submissions', JSON.stringify(updated));
       } catch (e) {}
       return updated;
     });
@@ -477,9 +439,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSub)
       }).catch((e) => console.warn('Lỗi ghi MongoDB Atlas:', e));
-    } catch (err) {
-      console.warn('Lỗi kết nối API gửi bài thi:', err);
-    }
+    } catch (err) {}
 
     setStudentExamPhase('student_results');
   };
@@ -494,13 +454,8 @@ export default function App() {
     });
 
     try {
-      await fetch(`/api/submissions/${submissionId}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (err) {
-      console.warn('Lỗi khi xóa bài nộp trên MongoDB Atlas:', err);
-    }
+      await fetch(`/api/submissions/${submissionId}`, { method: 'DELETE' });
+    } catch (err) {}
   };
 
   const handleClearSubmissions = async () => {
@@ -510,32 +465,21 @@ export default function App() {
     } catch (e) {}
 
     try {
-      await fetch('/api/submissions/clear-all', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' }
-      });
-    } catch (err) {
-      console.warn('Lỗi khi xóa sạch danh sách trên MongoDB Atlas:', err);
-    }
+      await fetch('/api/submissions/clear-all', { method: 'DELETE' });
+    } catch (err) {}
   };
 
   const handleOpenPrint = (mode: 'exam_only' | 'exam_with_solutions') => {
     setActivePrintMode(mode);
     setAppMode('print');
-    setTimeout(() => {
-      window.print();
-    }, 300);
+    setTimeout(() => { window.print(); }, 300);
   };
 
   const handleOpenPrintMatrix = (targetBundle: ExamVariantBundle) => {
-    if (targetBundle) {
-      setBundle(targetBundle);
-    }
+    if (targetBundle) setBundle(targetBundle);
     setActivePrintMode('matrix');
     setAppMode('print');
-    setTimeout(() => {
-      window.print();
-    }, 300);
+    setTimeout(() => { window.print(); }, 300);
   };
 
   const safeCurrentExam = (exam && Array.isArray(exam.questions) && exam.questions.length > 0) ? exam : DEFAULT_EXAM;
@@ -545,16 +489,20 @@ export default function App() {
       {/* THANH ĐIỀU HƯỚNG TẦNG ĐẦU */}
       <nav className="bg-slate-900 border-b border-slate-800 text-white px-4 py-2.5 sticky top-0 z-40 shadow-md print:hidden">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div 
+            onClick={() => setAppMode('home')}
+            className="flex items-center gap-3 cursor-pointer group"
+            title="Về Trang chủ Pano Banner"
+          >
             {branding.logoUrl ? (
-              <img src={branding.logoUrl} alt="Logo" className="w-8 h-8 rounded-xl object-contain bg-white/10 p-0.5 border border-white/20" />
+              <img src={branding.logoUrl} alt="Logo" className="w-8 h-8 rounded-xl object-contain bg-white/10 p-0.5 border border-white/20 group-hover:scale-105 transition" />
             ) : (
-              <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center font-black text-sm shadow-inner">
+              <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center font-black text-sm shadow-inner group-hover:scale-105 transition">
                 PX
               </div>
             )}
             <div>
-              <span className="font-bold text-sm tracking-wide block leading-tight">{branding.schoolName}</span>
+              <span className="font-bold text-sm tracking-wide block leading-tight group-hover:text-indigo-300 transition">{branding.schoolName}</span>
               <span className="text-3xs text-indigo-300 font-mono">{branding.subtitle}</span>
             </div>
           </div>
@@ -567,7 +515,7 @@ export default function App() {
                 setIsBrandingModalOpen(true);
               }}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer"
-              title="Tùy biến Logo và Hình nền Banner"
+              title="Tùy biến Logo và Hình nền Pano Banner"
             >
               <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
               <span className="hidden sm:inline">Cài đặt Banner & Logo</span>
@@ -576,81 +524,201 @@ export default function App() {
             <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-xl border border-slate-700">
               <button
                 type="button"
+                onClick={() => setAppMode('home')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  appMode === 'home'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Home className="w-3.5 h-3.5" />
+                <span>Trang chủ</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setAppMode('teacher')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                   appMode === 'teacher'
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <LayoutDashboard className="w-4 h-4" />
-                <span>Bảng điều khiển Giáo viên</span>
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                <span>Giáo viên</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setAppMode('student')}
-                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
                   appMode === 'student'
                     ? 'bg-emerald-600 text-white shadow-sm'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                <GraduationCap className="w-4 h-4" />
-                <span>Giao diện Học sinh làm bài</span>
+                <GraduationCap className="w-3.5 h-3.5" />
+                <span>Học sinh làm bài</span>
               </button>
             </div>
           </div>
         </div>
       </nav>
 
-      {/* PANO BANNER TRANG CHỦ CHUYÊN NGHIỆP */}
-      {appMode !== 'print' && (
-        <div className="relative overflow-hidden bg-slate-900 border-b border-slate-800 text-white py-8 sm:py-12 print:hidden shadow-sm">
-          {branding.bannerUrl && (
-            <div className="absolute inset-0 z-0">
-              <img
-                src={branding.bannerUrl}
-                alt="Pano Banner"
-                className="w-full h-full object-cover opacity-25 filter blur-[1px]"
-              />
-              <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-900/90 to-indigo-950/80" />
-            </div>
-          )}
-
-          <div className="max-w-7xl mx-auto px-4 relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-            <div className="space-y-2 max-w-3xl">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-200 text-xs font-semibold backdrop-blur-md">
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                <span>PhysiXam Online • Chuẩn Bộ Giáo dục & Đào tạo</span>
+      {/* ========================================================================= */}
+      {/* CHẾ ĐỘ 1: CỔNG THÔNG TIN TRANG CHỦ (PANO BANNER & CÁC LỐI VÀO CHÍNH)      */}
+      {/* ========================================================================= */}
+      {appMode === 'home' && (
+        <div>
+          {/* PANO BANNER LỚN CHUYÊN NGHIỆP */}
+          <div className="relative overflow-hidden bg-slate-900 border-b border-slate-800 text-white py-12 sm:py-20 shadow-md">
+            {branding.bannerUrl && (
+              <div className="absolute inset-0 z-0">
+                <img
+                  src={branding.bannerUrl}
+                  alt="Pano Banner"
+                  className="w-full h-full object-cover opacity-30 filter blur-[0.5px]"
+                />
+                <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-900/85 to-indigo-950/75" />
               </div>
-              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black tracking-tight text-white drop-shadow-sm">
-                {branding.schoolName}
-              </h1>
-              <p className="text-xs sm:text-sm text-slate-300 font-medium leading-relaxed">
-                {branding.subtitle}
-              </p>
-            </div>
+            )}
 
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setBrandingDraft(branding);
-                  setIsBrandingModalOpen(true);
-                }}
-                className="px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold transition flex items-center gap-2 backdrop-blur-md cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+            <div className="max-w-7xl mx-auto px-4 relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-8">
+              <div className="space-y-3 max-w-3xl">
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-200 text-xs font-semibold backdrop-blur-md">
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <span>PhysiXam Online • Hệ thống Khảo thí Vật lí Chuẩn GDPT 2018</span>
+                </div>
+                <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-white drop-shadow-md">
+                  {branding.schoolName}
+                </h1>
+                <p className="text-sm sm:text-base text-slate-300 font-medium leading-relaxed">
+                  {branding.subtitle}
+                </p>
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setAppMode('student')}
+                    className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm shadow-lg shadow-emerald-600/30 transition flex items-center gap-2 cursor-pointer hover:scale-105 active:scale-95"
+                  >
+                    <GraduationCap className="w-5 h-5" />
+                    <span>Vào phòng thi học sinh</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAppMode('teacher')}
+                    className="px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-sm shadow-lg shadow-indigo-600/30 transition flex items-center gap-2 cursor-pointer hover:scale-105 active:scale-95"
+                  >
+                    <LayoutDashboard className="w-5 h-5" />
+                    <span>Bảng điều khiển Giáo viên</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col items-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBrandingDraft(branding);
+                    setIsBrandingModalOpen(true);
+                  }}
+                  className="px-4 py-2.5 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold transition flex items-center gap-2 backdrop-blur-md cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <ImageIcon className="w-4 h-4 text-amber-300" />
+                  <span>Tùy biến Logo / Pano Banner</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* CÁC THẺ TRUY CẬP NHANH TRÊN TRANG CHỦ */}
+          <div className="max-w-7xl mx-auto px-4 py-10">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Thẻ 1: Khảo thí học sinh */}
+              <div 
+                onClick={() => setAppMode('student')}
+                className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-sm hover:shadow-md transition cursor-pointer hover:-translate-y-1 space-y-4 group"
               >
-                <ImageIcon className="w-4 h-4 text-amber-300" />
-                <span>Đổi Banner / Logo</span>
-              </button>
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center group-hover:scale-110 transition">
+                  <GraduationCap className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900 group-hover:text-emerald-600 transition">Giao diện Thi Trực Tuyến</h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    Học sinh làm bài thi trực tiếp với đầy đủ 3 phần thi theo cấu trúc Bộ GD&ĐT, đồng hồ đếm ngược và công thức KaTeX sắc nét.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-600 pt-2">
+                  <span>Bắt đầu làm bài</span>
+                  <ArrowRight className="w-4 h-4" />
+                </div>
+              </div>
+
+              {/* Thẻ 2: Quản trị giáo viên */}
+              <div 
+                onClick={() => setAppMode('teacher')}
+                className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-sm hover:shadow-md transition cursor-pointer hover:-translate-y-1 space-y-4 group"
+              >
+                <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center group-hover:scale-110 transition">
+                  <LayoutDashboard className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-900 group-hover:text-indigo-600 transition">Bảng Điều Khiển Giáo Viên</h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    Hệ thống 6 panel chuyên sâu: Ngân hàng đề thi GDPT 2018, bóc tách tệp Word, trộn mã đề, ma trận đáp án và thống kê phổ điểm.
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 pt-2">
+                  <span>Mở bảng điều khiển</span>
+                  <ArrowRight className="w-4 h-4" />
+                </div>
+              </div>
+
+              {/* Thẻ 3: Đề thi đang kích hoạt */}
+              <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-sm space-y-4">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center">
+                  <BookOpen className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="px-2 py-0.5 rounded-md font-mono font-bold text-3xs bg-amber-100 text-amber-800">Mã {activeCode}</span>
+                    <span className="text-3xs text-slate-400">Đề đang kích hoạt</span>
+                  </div>
+                  <h3 className="font-black text-sm text-slate-900 truncate">{safeCurrentExam.title}</h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Thời gian: {safeCurrentExam.durationMinutes || 45} phút • {safeCurrentExam.questions.length} câu hỏi
+                  </p>
+                </div>
+                <div className="pt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAppMode('student')}
+                    className="flex-1 py-2 px-3 rounded-xl bg-slate-900 text-white font-bold text-xs hover:bg-slate-800 transition text-center cursor-pointer"
+                  >
+                    Làm đề này
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenPrint('exam_only')}
+                    className="py-2 px-3 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs hover:bg-slate-200 transition cursor-pointer"
+                    title="In đề này"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       )}
 
+      {/* ========================================================================= */}
+      {/* CÁC CHẾ ĐỘ LÀM VIỆC KHÁC                                                 */}
+      {/* ========================================================================= */}
       <main className="max-w-7xl mx-auto px-4 py-6 pb-16 print:p-0 print:m-0 print:max-w-none">
-        {/* CHẾ ĐỘ 1: HỌC SINH LÀM BÀI / KẾT QUẢ */}
+        {/* CHẾ ĐỘ 2: HỌC SINH LÀM BÀI / KẾT QUẢ */}
         {appMode === 'student' && (
           <div>
             {studentExamPhase === 'launch' && (
@@ -690,7 +758,7 @@ export default function App() {
           </div>
         )}
 
-        {/* CHẾ ĐỘ 2: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
+        {/* CHẾ ĐỘ 3: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
         {appMode === 'teacher' && (
           <TeacherDashboard
             exam={safeCurrentExam}
@@ -714,10 +782,11 @@ export default function App() {
             onOpenPrintMatrix={handleOpenPrintMatrix}
             onOpenTeacherJsonModal={handleOpenJsonModal}
             onPreviewAsStudent={() => setAppMode('student')}
+            onNavigateHome={() => setAppMode('home')}
           />
         )}
 
-        {/* CHẾ ĐỘ 3: KHUNG XEM TRƯỚC VÀ IN ĐỀ THI / MA TRẬN ĐÁP ÁN */}
+        {/* CHẾ ĐỘ 4: IN ẤN */}
         {appMode === 'print' && (
           <div className="bg-white p-6 sm:p-10 rounded-3xl shadow-sm border border-slate-200 print:border-none print:shadow-none print:p-0">
             <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
@@ -834,7 +903,7 @@ export default function App() {
         )}
       </main>
 
-      {/* MODAL CÀI ĐẶT PANO BANNER & LOGO TRANG CHỦ */}
+      {/* MODAL CÀI ĐẶT PANO BANNER & LOGO */}
       {isBrandingModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
           <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-5">
@@ -872,7 +941,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Logo */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Logo Thương hiệu:</label>
                 <div className="flex items-center gap-3">
@@ -901,7 +969,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Banner */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Hình nền Pano Banner:</label>
                 <div className="flex items-center gap-3">
