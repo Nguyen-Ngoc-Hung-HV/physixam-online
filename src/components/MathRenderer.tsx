@@ -1,125 +1,50 @@
 import React, { useMemo } from 'react';
 import katex from 'katex';
-import { sanitizeMathAndUnits } from '../utils/mathSanitizer';
+import 'katex/dist/katex.min.css';
 
 interface MathRendererProps {
-  content: string;
+  content?: string | null;
   className?: string;
-  inline?: boolean;
 }
 
-interface TextSegment {
-  type: 'text' | 'inline-math' | 'display-math';
-  content: string;
-}
+export const MathRenderer: React.FC<MathRendererProps> = ({ content = '', className = '' }) => {
+  const renderedContent = useMemo(() => {
+    if (!content) return '';
+    let text = String(content);
 
-export const MathRenderer: React.FC<MathRendererProps> = ({ content, className = '', inline = false }) => {
-  // Tiền xử lý nội dung qua bộ lọc sanitizeMathAndUnits
-  const sanitizedContent = useMemo(() => {
-    return sanitizeMathAndUnits(content || '');
+    // 1. Tự động chuẩn hóa các công thức và đơn vị Vật lí thường gặp chưa có dấu $
+    // Ví dụ: m_{1}, a_{2}, v_{0}, m/s^{2}, kg.m/s...
+    text = text.replace(/([a-zA-Z])_\{([0-9a-zA-Z+-]+)\}/g, '$$$1_{$2}$$');
+    text = text.replace(/(\d+(?:[.,]\d+)?)\s*(m\/s\^\{?2\}?|m\/s|km\/h|kg|N|J|W|Pa|rad\/s|cm\/s\^\{?2\}?)/gi, (_, num, unit) => {
+      let cleanUnit = unit.replace(/\^\{?2\}?/, '^2');
+      return `${num} $\\text{${cleanUnit}}$`;
+    });
+
+    // 2. Tách chuỗi theo các khối công thức $$...$$ (khối lớn) hoặc $...$ (nội dòng)
+    const regex = /(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$)/g;
+    const parts = text.split(regex);
+
+    return parts.map((part, index) => {
+      if (part.startsWith('$$') && part.endsWith('$$')) {
+        const math = part.slice(2, -2).trim();
+        try {
+          const html = katex.renderToString(math, { displayMode: true, throwOnError: false });
+          return <span key={index} dangerouslySetInnerHTML={{ __html: html }} className="inline-block my-1" />;
+        } catch {
+          return <span key={index}>{part}</span>;
+        }
+      } else if (part.startsWith('$') && part.endsWith('$')) {
+        const math = part.slice(1, -1).trim();
+        try {
+          const html = katex.renderToString(math, { displayMode: false, throwOnError: false });
+          return <span key={index} dangerouslySetInnerHTML={{ __html: html }} className="inline-block mx-0.5" />;
+        } catch {
+          return <span key={index}>{part}</span>;
+        }
+      }
+      return <span key={index}>{part}</span>;
+    });
   }, [content]);
 
-  const segments = useMemo(() => {
-    if (!sanitizedContent) return [];
-    const result: TextSegment[] = [];
-
-    // First split by display math $$...$$
-    const displayRegex = /\$\$([\s\S]*?)\$\$/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = displayRegex.exec(sanitizedContent)) !== null) {
-      if (match.index > lastIndex) {
-        // Plain text before display math, which might contain inline math $...$
-        parseInlineMath(sanitizedContent.slice(lastIndex, match.index), result);
-      }
-      result.push({
-        type: 'display-math',
-        content: match[1].trim(),
-      });
-      lastIndex = match.index + match[0].length;
-    }
-
-    if (lastIndex < sanitizedContent.length) {
-      parseInlineMath(sanitizedContent.slice(lastIndex), result);
-    }
-
-    return result;
-  }, [sanitizedContent]);
-
-  function parseInlineMath(text: string, output: TextSegment[]) {
-    // Regex for inline math $...$ without escaping dollars
-    const inlineRegex = /\$((?:\\\$|[^$])+?)\$/g;
-    let last = 0;
-    let inlineMatch: RegExpExecArray | null;
-
-    while ((inlineMatch = inlineRegex.exec(text)) !== null) {
-      if (inlineMatch.index > last) {
-        output.push({
-          type: 'text',
-          content: text.slice(last, inlineMatch.index),
-        });
-      }
-      output.push({
-        type: 'inline-math',
-        content: inlineMatch[1].trim(),
-      });
-      last = inlineMatch.index + inlineMatch[0].length;
-    }
-
-    if (last < text.length) {
-      output.push({
-        type: 'text',
-        content: text.slice(last),
-      });
-    }
-  }
-
-  const renderMath = (mathCode: string, isDisplay: boolean) => {
-    try {
-      const html = katex.renderToString(mathCode, {
-        displayMode: isDisplay,
-        throwOnError: false,
-        strict: false,
-        trust: true,
-      });
-      return (
-        <span
-          className={isDisplay ? "block my-2 text-center overflow-x-auto py-1" : "inline-block align-baseline px-0.5"}
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      );
-    } catch (err) {
-      return (
-        <code className="text-red-500 bg-red-50 px-1 py-0.5 rounded text-xs">
-          {mathCode}
-        </code>
-      );
-    }
-  };
-
-  const renderPlainText = (text: string) => {
-    // Handle line breaks \n
-    const lines = text.split('\n');
-    return lines.map((line, idx) => (
-      <React.Fragment key={idx}>
-        {line}
-        {idx < lines.length - 1 && <br />}
-      </React.Fragment>
-    ));
-  };
-
-  return (
-    <span className={`inline leading-relaxed ${className}`}>
-      {segments.map((seg, idx) => {
-        if (seg.type === 'display-math') {
-          return <span key={idx}>{renderMath(seg.content, true)}</span>;
-        } else if (seg.type === 'inline-math') {
-          return <span key={idx}>{renderMath(seg.content, false)}</span>;
-        } else {
-          return <span key={idx}>{renderPlainText(seg.content)}</span>;
-        }
-      })}
-    </span>
-  );
+  return <span className={`math-rendered ${className}`}>{renderedContent}</span>;
 };
