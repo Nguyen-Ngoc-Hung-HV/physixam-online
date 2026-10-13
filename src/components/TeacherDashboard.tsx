@@ -131,7 +131,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     return Array.isArray(safeExam?.questions) ? safeExam.questions : [];
   }, [safeExam]);
 
-  // Panel hiện tại của Dashboard
   const resolvePanel = (p?: DashboardPanel): DashboardPanel => {
     if (!p) return 'panel1';
     if (p === 'overview') return 'panel1';
@@ -143,21 +142,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const [activePanel, setActivePanel] = useState<DashboardPanel>(() => resolvePanel(initialPanel));
 
-  // Trạng thái Subtab cho từng Panel
   const [panel2Tab, setPanel2Tab] = useState<'word_import' | 'visual_editor' | 'ai_scan' | 'json_import'>('word_import');
   const [panel3Tab, setPanel3Tab] = useState<'shuffling' | 'anticheat' | 'settings'>('shuffling');
   const [panel4Tab, setPanel4Tab] = useState<'submissions' | 'distribution' | 'export_report'>('submissions');
   const [panel5Tab, setPanel5Tab] = useState<'print_student' | 'print_teacher'>('print_student');
   const [panel6Tab, setPanel6Tab] = useState<'teachers' | 'students' | 'rbac'>('teachers');
 
-  // Quản lý tệp Word ở Panel 2 (Tab 2.1)
   const wordFileInputRef = useRef<HTMLInputElement>(null);
   const [wordFile, setWordFile] = useState<File | null>(null);
   const [isParsingWord, setIsParsingWord] = useState<boolean>(false);
   const [wordParseResult, setWordParseResult] = useState<WordExamParseResult | null>(null);
   const [wordParseError, setWordParseError] = useState<string | null>(null);
 
-  // Quản lý tệp JSON ở Panel 2 (Tab 2.4)
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
   const [jsonFile, setJsonFile] = useState<File | null>(null);
   const [isParsingJson, setIsParsingJson] = useState<boolean>(false);
@@ -304,7 +300,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     showToast(`Đã nạp đề thi [Mã: ${pkg.code}] "${pkg.title}" vào hệ thống khảo thí!`);
   };
 
-  // Đồng bộ đầy đủ đề thi và câu hỏi lên máy chủ khi giao bài
   const handleBankAssignExam = async (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
     const targetExam = pkg?.examData || safeExam;
     const finalCode = assignment.accessCode || (assignment as any).code || targetExam.code || 'L10GHKI';
@@ -525,7 +520,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     return { maxScore, minScore, avgScore, medianScore, passRate, total, bands };
   }, [submissions]);
 
-  // Bộ bóc tách file Word
   const handleWordFileChange = async (file: File) => {
     if (!file.name.endsWith('.docx') && !file.name.endsWith('.doc')) {
       setWordParseError('Vui lòng chọn tệp Word có định dạng .docx hoặc .doc.');
@@ -554,25 +548,35 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   };
 
   // =========================================================================
-  // TAB 2.4: BỘ CHUYỂN ĐỔI VÀ NẠP TỆP JSON (HỖ TRỢ BASE64 & BẢO TOÀN HÌNH VẼ 100%)
+  // TAB 2.4: BỘ PHÂN GIẢI JSON THÔNG MINH (TỰ ĐỘNG BÓC TÁCH CẢ CẤU TRÚC PHẲNG & LỒNG NHAU)
   // =========================================================================
   const parseJsonExamFile = (jsonData: any): Exam => {
-    const rawQuestions = Array.isArray(jsonData.questions) ? jsonData.questions : [];
+    // 1. Tự động bóc tách đối tượng cha nếu file có cấu trúc { exam: { ... } } hoặc { data: { ... } }
+    const root = jsonData?.exam || jsonData?.data || jsonData || {};
+
+    // 2. Tìm kiếm mảng câu hỏi ở mọi cấp độ khả dĩ
+    const rawQuestions: any[] = Array.isArray(root.questions) 
+      ? root.questions 
+      : Array.isArray(jsonData.questions) 
+        ? jsonData.questions 
+        : [];
 
     const convertedQuestions: Question[] = rawQuestions.map((q: any, idx: number) => {
-      // 1. Phân loại Phần thi GDPT 2018
+      // Xác định phần thi theo chuẩn GDPT 2018
       let partName = 'Phần I';
-      if (q.part === 'II' || q.part === 2 || q.type === 'true_false' || q.type === 'true_false_cluster') {
+      const rawPart = String(q.part || '').trim().toUpperCase();
+      const rawType = String(q.type || '').trim().toLowerCase();
+
+      if (rawPart === 'II' || rawPart === '2' || rawType.includes('true_false') || q.statements) {
         partName = 'Phần II';
-      } else if (q.part === 'III' || q.part === 3 || q.type === 'short_answer') {
+      } else if (rawPart === 'III' || rawPart === '3' || rawType.includes('short_answer') || q.correct_value) {
         partName = 'Phần III';
       }
 
-      // 2. Xử lý và bảo toàn hình ảnh nhúng Base64 chuẩn mẫu (lưu cả diagram và image)
+      // Bảo toàn và chuẩn hóa hình ảnh Base64
       let diagramObj = undefined;
       let imageObj = undefined;
 
-      // Ưu tiên đọc q.image hoặc q.diagram
       const imgSource = q.image || q.diagram;
       if (imgSource) {
         if (typeof imgSource === 'string') {
@@ -599,10 +603,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         }
       }
 
-      const qCode = q.number ? `C${String(q.number).padStart(2, '0')}` : `C${String(idx + 1).padStart(2, '0')}`;
-      const qTitle = `Câu ${q.number || idx + 1}`;
+      const qCode = q.code || (q.number ? `C${String(q.number).padStart(2, '0')}` : `C${String(idx + 1).padStart(2, '0')}`);
+      const qTitle = q.title || `Câu ${q.number || idx + 1}`;
       const qStem = q.question || q.prompt || q.stem || '';
-      const qTopic = q.metadata?.topic || '';
+      const qTopic = q.metadata?.topic || q.topic || '';
 
       // A. Phần I: Trắc nghiệm 4 lựa chọn
       if (partName === 'Phần I') {
@@ -612,7 +616,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           text: opt.text || opt.content || ''
         })) : [];
 
-        let correctAns = q.answer || '';
+        let correctAns = q.answer || q.correctAnswer || '';
         if (!correctAns && Array.isArray(q.options)) {
           const found = q.options.find((o: any) => o.correct === true);
           if (found) correctAns = found.id || found.label;
@@ -628,7 +632,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           prompt: qStem,
           topic: qTopic,
           options: opts,
-          correctAnswer: correctAns,
+          correctAnswer: String(correctAns).trim(),
           diagram: diagramObj,
           image: imageObj,
           explanation: q.explanation || '',
@@ -644,11 +648,24 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             ? q.items 
             : [];
 
-        const items = rawStatements.map((st: any, sIdx: number) => ({
-          id: st.id || String.fromCharCode(97 + sIdx),
-          statement: st.text || st.statement || '',
-          isCorrect: st.correct !== undefined ? Boolean(st.correct) : Boolean(st.isCorrect)
-        }));
+        const items = rawStatements.map((st: any, sIdx: number) => {
+          let boolCorrect = false;
+          // Nhận diện cả 'correct: true', 'answer: "D"', 'isCorrect: true'
+          if (st.correct !== undefined) {
+            boolCorrect = Boolean(st.correct);
+          } else if (st.isCorrect !== undefined) {
+            boolCorrect = Boolean(st.isCorrect);
+          } else if (st.answer !== undefined) {
+            const ansStr = String(st.answer).trim().toUpperCase();
+            boolCorrect = (ansStr === 'D' || ansStr === 'Đ' || ansStr === 'TRUE');
+          }
+
+          return {
+            id: st.id || String.fromCharCode(97 + sIdx),
+            statement: st.text || st.statement || '',
+            isCorrect: boolCorrect
+          };
+        });
 
         return {
           id: q.id || `q-${idx + 1}`,
@@ -685,16 +702,19 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       } as any;
     });
 
-    const examCode = jsonData.code || `L${jsonData.grade || 10}-${Date.now().toString().slice(-4)}`;
+    const finalTitle = root.title || jsonData.title || 'Đề khảo thí Vật lí (Nhập từ JSON)';
+    const finalGrade = root.grade || jsonData.grade || 10;
+    const finalCode = root.code || jsonData.code || `L${finalGrade}-${Date.now().toString().slice(-4)}`;
+    const finalDuration = Number(root.duration || root.durationMinutes || jsonData.duration || jsonData.durationMinutes || 45);
 
     return {
-      id: jsonData.id || `exam-${Date.now()}`,
-      code: examCode,
-      title: jsonData.title || 'Đề khảo thí Vật lí (Nhập từ JSON)',
-      subtitle: jsonData.scope || jsonData.curriculum || '',
-      durationMinutes: Number(jsonData.duration || jsonData.durationMinutes || 45),
-      totalPoints: Number(jsonData.totalPoints || 10),
-      gradeLevel: jsonData.grade ? `Khối ${jsonData.grade}` : 'Khối 10',
+      id: root.id || jsonData.id || `exam-${Date.now()}`,
+      code: finalCode,
+      title: finalTitle,
+      subtitle: root.scope || root.curriculum || jsonData.scope || jsonData.curriculum || '',
+      durationMinutes: finalDuration,
+      totalPoints: Number(root.totalPoints || jsonData.totalPoints || 10),
+      gradeLevel: `Khối ${finalGrade}`,
       questions: convertedQuestions
     } as any;
   };
@@ -714,8 +734,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       try {
         const text = e.target?.result as string;
         const parsedData = JSON.parse(text);
-        if (!parsedData || !Array.isArray(parsedData.questions)) {
-          throw new Error('Tệp JSON không hợp lệ: Thiếu mảng "questions".');
+
+        // Kiểm tra linh động mảng questions ở cả tầng ngoài cùng lẫn tầng con (exam, data)
+        const hasQuestions = (parsedData && Array.isArray(parsedData.questions)) ||
+          (parsedData?.exam && Array.isArray(parsedData.exam.questions)) ||
+          (parsedData?.data && Array.isArray(parsedData.data.questions));
+
+        if (!hasQuestions) {
+          throw new Error('Tệp JSON không hợp lệ: Không tìm thấy mảng câu hỏi "questions" trong cấu trúc tệp.');
         }
 
         const converted = parseJsonExamFile(parsedData);
@@ -924,7 +950,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           </button>
         </div>
 
-        {/* Nút thao tác nhanh JSON */}
         <div className="hidden xl:flex items-center gap-2 pr-2">
           <button
             type="button"
@@ -937,9 +962,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* PANEL 1: TỔNG QUAN & NGÂN HÀNG ĐỀ THI CHUẨN GDPT 2018                     */}
-      {/* ========================================================================= */}
+      {/* PANEL 1: TỔNG QUAN & NGÂN HÀNG ĐỀ THI */}
       {(activePanel === 'panel1' || activePanel === 'overview') && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3">
@@ -1022,7 +1045,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       Mã {activeCode}
                     </span>
                   </div>
-                  <h3 className="text-base sm:lg font-black text-white">{safeExam.title}</h3>
+                  <h3 className="text-base sm:text-lg font-black text-white">{safeExam.title}</h3>
                   <p className="text-xs text-slate-300 mt-0.5">{safeExam.subtitle} • {safeExam.durationMinutes || 45} phút • Thang {safeExam.totalPoints || 10}đ</p>
                 </div>
 
@@ -1045,11 +1068,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       } else {
                         const tempPkg: ExamPackage = {
                           id: safeExam.id || 'temp-exam',
-                          grade: 10,
+                          grade: 12,
                           category: 'survey',
                           categoryLabel: 'Chuẩn Bộ GD&ĐT',
-                          chapterId: '10-c1',
-                          chapterTitle: 'Chương 1: Mở đầu & Động học',
+                          chapterId: '12-c1',
+                          chapterTitle: 'Chương 1: Vật lí nhiệt & Sóng - Điện',
                           code: activeCode,
                           title: safeExam.title,
                           subtitle: safeExam.subtitle,
@@ -1148,9 +1171,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* PANEL 2: SOẠN THẢO & BÓC TÁCH ĐỀ THÔNG MINH (4 TABS HOÀN CHỈNH)           */}
-      {/* ========================================================================= */}
+      {/* PANEL 2: SOẠN THẢO & BÓC TÁCH ĐỀ THÔNG MINH */}
       {(activePanel === 'panel2' || activePanel === 'ai_tools') && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3">
@@ -1302,7 +1323,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     {isParsingJson ? 'Đang đọc và phân tích cấu trúc tệp JSON...' : 'Nhấp hoặc kéo thả tệp đề thi (.json) vào đây'}
                   </span>
                   <span className="text-xs text-slate-500 mt-1 block">
-                    Tương thích hoàn toàn với cấu trúc JSON nhúng hình Base64 chuẩn GDPT 2018
+                    Tương thích hoàn toàn với cấu trúc JSON nhúng hình Base64 chuẩn GDPT 2018 (Hỗ trợ cấu trúc bọc "exam" hoặc phẳng)
                   </span>
                 </div>
                 <input
@@ -1376,9 +1397,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* PANEL 3: CẤU HÌNH KỲ THI & TRỘN MÃ ĐỀ                                      */}
-      {/* ========================================================================= */}
+      {/* PANEL 3: CẤU HÌNH KỲ THI & TRỘN MÃ ĐỀ */}
       {(activePanel === 'panel3' || activePanel === 'config') && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3">
@@ -1432,12 +1451,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* PANEL 4: GIÁM SÁT & BẢNG ĐIỂM                                              */}
-      {/* ========================================================================= */}
+      {/* PANEL 4: GIÁM SÁT & BẢNG ĐIỂM */}
       {(activePanel === 'panel4' || activePanel === 'monitoring') && (
         <div className="space-y-6">
-
           <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-1.5">
               <button
@@ -1601,7 +1617,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     value={studentSearch}
                     onChange={(e) => setStudentSearch(e.target.value)}
                     placeholder="Tìm tên, lớp hoặc SBD..."
-                    className="w-full pl-8 pr-3 py-1.5 rounded-xl text-xs bg-slate-50 border border-slate-200 focus:bg-white focus:border-indigo-500 outline-none"
+                    className="w-full pl-8 pr-3 py-1.5 rounded-xl text-xs bg-slate-50 border border-slate-200 focus:bg-white outline-none"
                   />
                 </div>
               </div>
@@ -1843,9 +1859,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* PANEL 5: TRUNG TÂM IN ẤN & XUẤT BẢN PDF                                   */}
-      {/* ========================================================================= */}
+      {/* PANEL 5: TRUNG TÂM IN ẤN & XUẤT BẢN PDF */}
       {activePanel === 'panel5' && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex items-center justify-between">
