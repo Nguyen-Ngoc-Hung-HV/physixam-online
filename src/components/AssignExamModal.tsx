@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ExamPackage, ExamAssignmentInfo } from '../types/curriculum';
+import { ExamPackage, ExamAssignmentInfo, GradeLevel } from '../types/curriculum';
 import { Exam } from '../types/exam';
 import { 
   Send, X, Copy, Check, QrCode, ShieldCheck, 
@@ -32,23 +32,41 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isSynced, setIsSynced] = useState<boolean>(false);
 
-  // Lấy dữ liệu đề thi thực tế (18 câu hỏi)
-  const effectiveExam: Exam = (examPackage && examPackage.examData) 
-    ? examPackage.examData 
-    : (currentExam || (examPackage as any));
+  // Ưu tiên số 1: Lấy đề thi đang soạn/nạp trong currentExam
+  const effectiveExam: Exam = (currentExam && Array.isArray(currentExam.questions) && currentExam.questions.length > 0)
+    ? currentExam
+    : (examPackage && examPackage.examData && Array.isArray(examPackage.examData.questions) && examPackage.examData.questions.length > 0)
+      ? examPackage.examData
+      : (examPackage as any);
 
-  // Mã rút gọn của bài thi (ví dụ: L10GHKI hoặc mã gói đề)
-  const shortCode = examPackage?.code || effectiveExam?.code || 'L10GHKI';
+  // Mã rút gọn đồng bộ tuyệt đối giữa đề và lượt giao
+  const shortCode = effectiveExam?.code || examPackage?.code || 'L12B1.3';
+  const examTitle = effectiveExam?.title || examPackage?.title || 'Đề thi Khảo thí Vật lí';
+  
+  // Xác định Khối lớp và ép kiểu GradeLevel an toàn để không bị báo lỗi TypeScript
+  let rawGradeNum = 12;
+  if (effectiveExam?.gradeLevel) {
+    rawGradeNum = parseInt(String(effectiveExam.gradeLevel).replace(/\D/g, ''), 10) || 12;
+  } else if (examPackage?.grade) {
+    rawGradeNum = typeof examPackage.grade === 'number' 
+      ? examPackage.grade 
+      : (parseInt(String(examPackage.grade).replace(/\D/g, ''), 10) || 12);
+  }
+  const effectiveGrade = (rawGradeNum as unknown) as GradeLevel;
+
+  const durationMin = effectiveExam?.durationMinutes || (examPackage as any)?.durationMinutes || 45;
+  // Sửa lỗi: Lấy an toàn số lượng câu hỏi mà không phụ thuộc vào thuộc tính cố định
+  const totalQuestionsCount = effectiveExam?.questions?.length || (examPackage as any)?.total_questions || 28;
 
   // Đường link trực tiếp cho học sinh làm bài
   const shareUrl = typeof window !== 'undefined' 
     ? `${window.location.origin}/?code=${encodeURIComponent(shortCode)}` 
     : `https://physixam-online.vercel.app/?code=${encodeURIComponent(shortCode)}`;
 
-  // Mã QR chuẩn mực
+  // Mã QR chất lượng cao
   const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(shareUrl)}&margin=10`;
 
-  // TỰ ĐỘNG ĐẨY TOÀN BỘ 18 CÂU HỎI LÊN MONGODB ATLAS NGAY KHI MỞ MODAL
+  // TỰ ĐỘNG ĐẨY ĐÚNG ĐỀ HIỆN TẠI LÊN MONGODB ATLAS
   useEffect(() => {
     if (!isOpen) return;
 
@@ -61,13 +79,14 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
           accessCode: shortCode,
           examCode: shortCode,
           examId: examPackage?.id || `pkg-${shortCode}`,
-          title: effectiveExam?.title || examPackage?.title || 'Đề thi Khảo thí Vật lí',
-          examTitle: effectiveExam?.title || examPackage?.title || 'Đề thi Khảo thí Vật lí',
+          title: examTitle,
+          examTitle: examTitle,
           className: selectedClass,
-          durationMinutes: effectiveExam?.durationMinutes || 45,
+          grade: effectiveGrade,
+          durationMinutes: durationMin,
           totalPoints: effectiveExam?.totalPoints || 10,
           questions: effectiveExam?.questions || [],
-          examData: effectiveExam, // BẮT BUỘC ĐÍNH KÈM ĐỀ ĐẦY ĐỦ CÂU HỎI
+          examData: effectiveExam,
           assignedAt: new Date().toISOString(),
           status: 'active'
         };
@@ -89,7 +108,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
     };
 
     syncToDatabase();
-  }, [isOpen, shortCode, effectiveExam, selectedClass, examPackage]);
+  }, [isOpen, shortCode, examTitle, effectiveExam, selectedClass, effectiveGrade, durationMin, examPackage]);
 
   if (!isOpen || !examPackage) return null;
 
@@ -108,11 +127,11 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   const handleConfirm = (switchToStudent: boolean) => {
     const newAssignment: ExamAssignmentInfo = {
       id: `assign-${Date.now()}`,
-      examId: examPackage.id,
-      examTitle: effectiveExam?.title || examPackage.title,
+      examId: examPackage.id || `pkg-${shortCode}`,
+      examTitle: examTitle,
       examCode: shortCode,
       accessCode: shortCode,
-      grade: examPackage.grade || 10,
+      grade: effectiveGrade,
       className: selectedClass,
       assignedAt: new Date().toLocaleDateString('vi-VN'),
       openTime: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
@@ -123,29 +142,38 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
       preventCopyAndShortcuts: true,
       requireFullscreen: true,
       shuffleQuestions: distributionMode === 'shuffled',
-      examData: effectiveExam // Đảm bảo luôn kèm dữ liệu đề
+      examData: effectiveExam
     } as any;
 
-    onAssign(examPackage, newAssignment, switchToStudent);
+    const effectivePkg: ExamPackage = {
+      ...examPackage,
+      id: examPackage.id || `pkg-${shortCode}`,
+      code: shortCode,
+      title: examTitle,
+      grade: effectiveGrade,
+      examData: effectiveExam
+    };
+
+    onAssign(effectivePkg, newAssignment, switchToStudent);
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
       <div className="bg-white rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl border border-slate-200 my-8">
         
-        {/* Tiêu đề Modal Header màu tím chuẩn */}
+        {/* Header Modal */}
         <div className="p-6 bg-gradient-to-r from-indigo-700 via-indigo-600 to-violet-700 text-white flex items-start justify-between">
           <div className="space-y-1">
             <span className="text-3xs uppercase tracking-widest font-mono text-indigo-200 block">
-              GIAO BÀI THI CHO HỌC SINH • KHỐI {examPackage.grade || 10} - MÃ {shortCode}
+              GIAO BÀI THI CHO HỌC SINH • KHỐI {String(effectiveGrade)} – MÃ {shortCode}
             </span>
-            <h3 className="text-xl font-black text-white leading-snug line-clamp-1">
-              ĐỀ THI VẬT LÍ: {effectiveExam?.title || examPackage.title}
+            <h3 className="text-xl font-black text-white leading-snug line-clamp-2">
+              ĐỀ THI VẬT LÍ: {examTitle}
             </h3>
             <p className="text-xs text-indigo-100 flex items-center gap-2 pt-0.5">
-              <span>Thời lượng: {effectiveExam?.durationMinutes || 45} phút</span>
+              <span>Thời lượng: {durationMin} phút</span>
               <span>•</span>
-              <span>{effectiveExam?.questions?.length || 18} câu hỏi</span>
+              <span>{totalQuestionsCount} câu hỏi</span>
               <span>•</span>
               <span>Thang điểm 10đ</span>
             </p>
@@ -244,7 +272,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
             </div>
           </div>
 
-          {/* VÙNG CHIA SẺ LINK VÀ MÃ QR ĐỒNG BỘ MONGODB */}
+          {/* Link làm bài và mã QR */}
           <div className="p-5 rounded-3xl bg-indigo-50/50 border border-indigo-200/80 space-y-4">
             <div className="flex items-center justify-between">
               <span className="text-xs font-black text-indigo-950 uppercase tracking-wider">
@@ -298,7 +326,6 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
               </button>
             </div>
 
-            {/* Mã QR cho học sinh quét */}
             {showQr && (
               <div className="p-4 bg-white rounded-2xl border border-indigo-100 text-center space-y-2 flex flex-col items-center">
                 <img
@@ -315,7 +342,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
 
         </div>
 
-        {/* Nút chân trang hành động */}
+        {/* Nút thao tác dưới cùng */}
         <div className="p-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
           <button
             type="button"
