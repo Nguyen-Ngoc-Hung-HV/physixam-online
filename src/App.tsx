@@ -9,7 +9,7 @@ import {
   Home, LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
   Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, 
   UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, CheckCircle2,
-  Lock, KeyRound, AlertCircle, Megaphone, Loader2
+  Lock, KeyRound, AlertCircle, Megaphone, Loader2, UserCheck, Maximize2
 } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
@@ -74,7 +74,7 @@ const PRESET_BANNERS = [
 const DEFAULT_BRANDING = {
   schoolName: 'TRƯỜNG THPT HÙNG VƯƠNG',
   subtitle: 'HỆ THỐNG KHẢO THÍ VẬT LÍ TRỰC TUYẾN • CHƯƠNG TRÌNH GDPT 2018',
-  tickerText: '⚡ CHÀO MỪNG QUÝ THẦY CÔ VÀ CÁC EM HỌC SINH! • "Học để hiểu bản chất của tự nhiên — Thi để khẳng định tư duy khoa học" • Hệ thống khảo thí Vật lí trực tuyến chuẩn cấu trúc GDPT 2018 • Đề thi phân hóa rõ 3 phần: Trắc nghiệm 4 lựa chọn, Đúng/Sai đa ý và Trả lời ngắn!',
+  tickerText: '⚡ CHÀO MỪNG QUÝ THẦY CÔ VÀ CÁC EM HỌC SINH! • "Học để hiểu bản chất của tự nhiên — Thi để khẳng định tư duy khoa học" • Hệ thống khảo thí Vật lí trực tuyến chuẩn cấu trúc GDPT 2018',
   logoUrl: '',
   bannerUrl: PRESET_BANNERS[0].url
 };
@@ -117,8 +117,6 @@ export default function App() {
 
   const [isBrandingModalOpen, setIsBrandingModalOpen] = useState(false);
   const [brandingDraft, setBrandingDraft] = useState(branding);
-  const logoInputRef = useRef<HTMLInputElement>(null);
-  const bannerInputRef = useRef<HTMLInputElement>(null);
 
   const [exam, setExam] = useState<Exam>(() => {
     try {
@@ -183,99 +181,74 @@ export default function App() {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [timeRemainingSeconds, setTimeRemainingSeconds] = useState<number>(45 * 60);
   const [evaluation, setEvaluation] = useState<any>(null);
+
+  // THÔNG TIN BẮT BUỘC CỦA THÍ SINH
   const [candidateInfo, setCandidateInfo] = useState({
-    name: 'Thí sinh tự do',
-    studentClass: '10A1',
-    candidateNumber: 'SBD-001'
+    name: '',
+    studentClass: '',
+    candidateNumber: ''
   });
+  // BAN ĐẦU LUÔN BẰNG FALSE ĐỂ BẮT BUỘC ĐI QUA CỔNG ĐĂNG KÝ
+  const [isRegistered, setIsRegistered] = useState<boolean>(false);
+
   const [auditLog, setAuditLog] = useState<{ violations: ViolationEvent[] }>({ violations: [] });
   const [antiCheatConfig, setAntiCheatConfig] = useState<AntiCheatConfig>({
     enabled: true,
     maxViolations: 5
   } as any);
 
-  // TỰ ĐỘNG NẠP ĐỀ THI ĐÃ GIAO KHI HỌC SINH MỞ LINK / QUÉT QR
+  // NẠP ĐỀ TỰ ĐỘNG TỪ MONGODB ATLAS KHI QUÉT QR HOẶC TRUY CẬP LINK
   useEffect(() => {
-    const resolveAssignedExam = async () => {
+    const fetchExamFromMongo = async () => {
       try {
         const params = new URLSearchParams(window.location.search);
         const searchCode = params.get('code') || params.get('variant');
         const assignId = params.get('assign') || params.get('assignmentId');
-        const examId = params.get('exam') || params.get('examId') || params.get('packageId');
+        const examId = params.get('exam') || params.get('examId');
 
-        const targetIdentifier = (searchCode || assignId || examId || '').trim().toUpperCase();
-        if (!targetIdentifier) return;
+        const targetCode = (searchCode || assignId || examId || '').trim();
+        if (!targetCode) return;
 
         setIsLoadingAssignedExam(true);
 
-        // 1. Kiểm tra trong danh sách assignments cục bộ
-        const matchedAssign: any = assignments.find((a: any) => {
-          const aId = String(a?.id || '').toUpperCase();
-          const aCode = String(a?.code || a?.examCode || '').toUpperCase();
-          return aId === targetIdentifier || aCode === targetIdentifier;
-        });
+        const localMatched: any = assignments.find((a: any) => 
+          String(a.id || '').toUpperCase() === targetCode.toUpperCase() ||
+          String(a.code || a.accessCode || a.examCode || '').toUpperCase() === targetCode.toUpperCase()
+        );
 
-        if (matchedAssign && matchedAssign.examData && Array.isArray(matchedAssign.examData.questions) && matchedAssign.examData.questions.length > 0) {
-          const target = matchedAssign.examData;
-          setExam(target);
-          setActiveCode(matchedAssign.code || matchedAssign.examCode || target.code || '101');
-          setTimeRemainingSeconds((target.durationMinutes || 45) * 60);
-          setAnswers({});
-          setFlaggedQuestionIds(new Set());
-          setCurrentQuestionIndex(0);
-          safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', JSON.stringify(target)) : localStorage.setItem('physixam_current_exam', JSON.stringify(target));
+        if (localMatched && localMatched.examData && Array.isArray(localMatched.examData.questions) && localMatched.examData.questions.length > 0) {
+          setExam(localMatched.examData);
+          setActiveCode(localMatched.code || localMatched.accessCode || localMatched.examCode || targetCode);
+          setTimeRemainingSeconds((localMatched.examData.durationMinutes || 45) * 60);
           setIsLoadingAssignedExam(false);
           return;
         }
 
-        // 2. Kiểm tra nếu trong localStorage đã có đề đang mở
-        try {
-          const savedCurrent = safeStorage?.getItem ? safeStorage.getItem('physixam_current_exam') : localStorage.getItem('physixam_current_exam');
-          if (savedCurrent) {
-            const parsed = JSON.parse(savedCurrent);
-            if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-              const pCode = String(parsed.code || '').toUpperCase();
-              if (pCode === targetIdentifier || !targetIdentifier) {
-                setExam(parsed);
-                setActiveCode(parsed.code || '101');
-                setTimeRemainingSeconds((parsed.durationMinutes || 45) * 60);
-                setIsLoadingAssignedExam(false);
-                return;
-              }
+        const response = await fetch(`/api/assignments?code=${encodeURIComponent(targetCode)}`);
+        if (response.ok) {
+          const doc = await response.json();
+          const cloudExam = doc?.examData || doc?.exam || (doc.questions ? doc : null);
+          if (cloudExam && Array.isArray(cloudExam.questions) && cloudExam.questions.length > 0) {
+            setExam(cloudExam);
+            setActiveCode(doc.code || doc.accessCode || cloudExam.code || targetCode);
+            setTimeRemainingSeconds((cloudExam.durationMinutes || 45) * 60);
+            if (safeStorage?.setItem) {
+              safeStorage.setItem('physixam_current_exam', JSON.stringify(cloudExam));
+            } else {
+              localStorage.setItem('physixam_current_exam', JSON.stringify(cloudExam));
             }
+            setIsLoadingAssignedExam(false);
+            return;
           }
-        } catch (e) {}
-
-        // 3. Gọi API lấy đề thi từ MongoDB Atlas
-        try {
-          const response = await fetch(`/api/assignments?code=${encodeURIComponent(targetIdentifier)}`);
-          if (response.ok) {
-            const data = await response.json();
-            const targetExam = data?.examData || data?.exam || data;
-            if (targetExam && Array.isArray(targetExam.questions) && targetExam.questions.length > 0) {
-              setExam(targetExam);
-              setActiveCode(targetExam.code || searchCode || '101');
-              setTimeRemainingSeconds((targetExam.durationMinutes || 45) * 60);
-              setAnswers({});
-              setFlaggedQuestionIds(new Set());
-              setCurrentQuestionIndex(0);
-              safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', JSON.stringify(targetExam)) : localStorage.setItem('physixam_current_exam', JSON.stringify(targetExam));
-              setIsLoadingAssignedExam(false);
-              return;
-            }
-          }
-        } catch (apiErr) {
-          console.warn('Không thể nạp đề thi từ API:', apiErr);
         }
-
-        setIsLoadingAssignedExam(false);
       } catch (err) {
-        console.warn('Lỗi xử lý URL đề thi:', err);
+        console.warn('Lỗi kết nối tải đề thi từ MongoDB Atlas:', err);
+      } finally {
         setIsLoadingAssignedExam(false);
       }
     };
 
-    resolveAssignedExam();
+    fetchExamFromMongo();
   }, [assignments]);
 
   useEffect(() => {
@@ -309,8 +282,9 @@ export default function App() {
     }
   }, [exam]);
 
+  // Bộ đếm thời gian CHỈ CHẠY khi thí sinh đã hoàn tất đăng ký
   useEffect(() => {
-    if (studentExamPhase !== 'launch' || appMode !== 'student') return;
+    if (studentExamPhase !== 'launch' || appMode !== 'student' || !isRegistered) return;
     const timer = setInterval(() => {
       setTimeRemainingSeconds((prev) => {
         if (prev <= 1) {
@@ -322,7 +296,7 @@ export default function App() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [studentExamPhase, appMode]);
+  }, [studentExamPhase, appMode, isRegistered]);
 
   const handleRequestTeacherMode = () => {
     if (isTeacherAuthenticated) {
@@ -356,19 +330,6 @@ export default function App() {
       localStorage.setItem('physixam_branding', JSON.stringify(brandingDraft));
     } catch (e) {}
     setIsBrandingModalOpen(false);
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, field: 'logoUrl' | 'bannerUrl') => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          setBrandingDraft((prev: any) => ({ ...prev, [field]: reader.result }));
-        }
-      };
-      reader.readAsDataURL(file);
-    }
   };
 
   const handleApplyBundle = (newBundle: ExamVariantBundle) => {
@@ -409,17 +370,44 @@ export default function App() {
     }
   };
 
+  const uploadExamToMongoDB = async (examToUpload: Exam, customCode?: string) => {
+    try {
+      const finalCode = customCode || examToUpload.code || '101';
+      await fetch('/api/assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `assign-${finalCode}`,
+          code: finalCode,
+          accessCode: finalCode,
+          examCode: finalCode,
+          title: examToUpload.title,
+          examData: examToUpload,
+          assignedAt: new Date().toISOString()
+        })
+      });
+    } catch (e) {}
+  };
+
   const handleLoadExamFromBank = (selectedPkg: ExamPackage) => {
     if (!selectedPkg || !selectedPkg.examData) return;
     const targetExam = selectedPkg.examData;
+    const targetCode = targetExam.code || selectedPkg.code || '101';
+    
     setExam(targetExam);
-    setActiveCode(targetExam.code || selectedPkg.code || '101');
+    setActiveCode(targetCode);
     setBundle(null);
     try {
       localStorage.removeItem('physixam_bundle');
       const serialized = JSON.stringify(targetExam);
-      safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', serialized) : localStorage.setItem('physixam_current_exam', serialized);
+      if (safeStorage?.setItem) {
+        safeStorage.setItem('physixam_current_exam', serialized);
+      } else {
+        localStorage.setItem('physixam_current_exam', serialized);
+      }
     } catch (e) {}
+
+    uploadExamToMongoDB(targetExam, targetCode);
 
     setAnswers({});
     setFlaggedQuestionIds(new Set());
@@ -434,8 +422,14 @@ export default function App() {
     if (updatedExam.code) setActiveCode(updatedExam.code);
     try {
       const serialized = JSON.stringify(updatedExam);
-      safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', serialized) : localStorage.setItem('physixam_current_exam', serialized);
+      if (safeStorage?.setItem) {
+        safeStorage.setItem('physixam_current_exam', serialized);
+      } else {
+        localStorage.setItem('physixam_current_exam', serialized);
+      }
     } catch (e) {}
+
+    uploadExamToMongoDB(updatedExam, updatedExam.code);
   };
 
   const handleOpenJsonModal = () => {
@@ -465,9 +459,22 @@ export default function App() {
   };
 
   const handleAssignExam = async (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
+    const targetExam = pkg?.examData || (pkg as any)?.questions ? (pkg as any) : exam || safeCurrentExam;
+    const finalCode = (assignment as any)?.code || assignment.accessCode || targetExam.code || 'L10GHKI';
+
     const fullAssignment: any = {
       ...assignment,
-      examData: pkg.examData
+      id: assignment.id || `assign-${Date.now()}`,
+      code: finalCode,
+      accessCode: finalCode,
+      examCode: targetExam.code || finalCode,
+      examTitle: targetExam.title || assignment.examTitle,
+      title: targetExam.title || assignment.examTitle,
+      durationMinutes: targetExam.durationMinutes || 45,
+      questions: targetExam.questions || [],
+      examData: targetExam,
+      assignedAt: new Date().toISOString(),
+      status: 'active'
     };
 
     setAssignments((prev) => {
@@ -481,11 +488,11 @@ export default function App() {
     handleLoadExamFromBank(pkg);
 
     try {
-      fetch('/api/assignments', {
+      await fetch('/api/assignments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fullAssignment)
-      }).catch((e) => console.warn('Lỗi ghi đề thi đã giao lên server:', e));
+      });
     } catch (e) {}
 
     if (switchToStudent) setAppMode('student');
@@ -530,13 +537,13 @@ export default function App() {
 
     questionsList.forEach((q: any) => {
       if (!q || !q.id) return;
-      const userAns = (answers && answers[q.id]) !== undefined ? answers[q.id] : undefined;
+      const userAns = (answers && (answers as any)[q.id]) !== undefined ? (answers as any)[q.id] : undefined;
       let isCorrect = false;
       let pointsAwarded = 0;
       const qPoints = q.points || (10 / (questionsList.length || 1));
 
       if (q.type === 'multiple_choice') {
-        if (userAns === q.correctAnswer) {
+        if (String(userAns) === String(q.correctAnswer)) {
           isCorrect = true;
           pointsAwarded = qPoints;
         }
@@ -571,10 +578,10 @@ export default function App() {
     const safeExamCode = exam?.code || activeCode || '101';
     const newSub: StudentSubmission = {
       id: `sub-${Date.now()}`,
-      studentName: candidateInfo.name,
-      candidateName: candidateInfo.name,
-      studentClass: candidateInfo.studentClass,
-      candidateNumber: candidateInfo.candidateNumber,
+      studentName: candidateInfo.name || 'Thí sinh tự do',
+      candidateName: candidateInfo.name || 'Thí sinh tự do',
+      studentClass: candidateInfo.studentClass || '10A',
+      candidateNumber: candidateInfo.candidateNumber || 'SBD-001',
       examCode: safeExamCode,
       totalScore: finalScore,
       score: finalScore,
@@ -590,7 +597,11 @@ export default function App() {
     setSubmissions((prev) => {
       const updated = [newSub, ...(prev || [])];
       try {
-        safeStorage?.setItem ? safeStorage.setItem('physixam_submissions', JSON.stringify(updated)) : localStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        if (safeStorage?.setItem) {
+          safeStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        } else {
+          localStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        }
       } catch (e) {}
       return updated;
     });
@@ -610,7 +621,11 @@ export default function App() {
     setSubmissions((prev: any[]) => {
       const updated = (prev || []).filter((s: any) => String(s.id || s._id) !== String(submissionId));
       try {
-        safeStorage?.setItem ? safeStorage.setItem('physixam_submissions', JSON.stringify(updated)) : localStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        if (safeStorage?.setItem) {
+          safeStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        } else {
+          localStorage.setItem('physixam_submissions', JSON.stringify(updated));
+        }
       } catch (e) {}
       return updated;
     });
@@ -623,7 +638,11 @@ export default function App() {
   const handleClearSubmissions = async () => {
     setSubmissions([]);
     try {
-      safeStorage?.setItem ? safeStorage.setItem('physixam_submissions', JSON.stringify([])) : localStorage.setItem('physixam_submissions', JSON.stringify([]));
+      if (safeStorage?.setItem) {
+        safeStorage.setItem('physixam_submissions', JSON.stringify([]));
+      } else {
+        localStorage.setItem('physixam_submissions', JSON.stringify([]));
+      }
     } catch (e) {}
 
     try {
@@ -642,6 +661,26 @@ export default function App() {
     setActivePrintMode('matrix');
     setAppMode('print');
     setTimeout(() => { window.print(); }, 300);
+  };
+
+  // =========================================================================
+  // XỬ LÝ BẮT BUỘC NHẬP HỌ TÊN, LỚP, SBD VÀ KÍCH HOẠT TOÀN MÀN HÌNH
+  // =========================================================================
+  const handleStartExamWithRegistration = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!candidateInfo.name.trim() || !candidateInfo.studentClass.trim() || !candidateInfo.candidateNumber.trim()) {
+      alert('Vui lòng nhập đầy đủ: Họ và tên, Lớp và Số báo danh để bắt đầu bài thi!');
+      return;
+    }
+
+    // Tự động kích hoạt toàn màn hình để tối ưu hóa diện tích & giám sát
+    try {
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    } catch (err) {}
+
+    setIsRegistered(true);
   };
 
   const safeCurrentExam = (exam && Array.isArray(exam.questions) && exam.questions.length > 0) ? exam : DEFAULT_EXAM;
@@ -664,101 +703,100 @@ export default function App() {
         }
       `}</style>
 
-      {/* 1. THANH ĐIỀU HƯỚNG NỔI (FLOATING NAVBAR) */}
-      <header className="sticky top-0 z-40 px-3 sm:px-6 py-2.5 print:hidden">
-        <div className="max-w-7xl mx-auto backdrop-blur-xl bg-slate-900/90 border border-slate-800/80 rounded-2xl shadow-xl shadow-slate-950/20 px-4 py-2 flex items-center justify-between gap-4">
-          
-          <div 
-            onClick={() => setAppMode('home')}
-            className="flex items-center gap-3 cursor-pointer group select-none min-w-0"
-            title="Về Trang chủ Pano"
-          >
-            {branding.logoUrl ? (
-              <img 
-                src={branding.logoUrl} 
-                alt="Logo" 
-                className="w-8 h-8 rounded-xl object-contain bg-white/10 p-1 border border-white/20 group-hover:scale-105 transition shadow-sm shrink-0" 
-              />
-            ) : (
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
-                <Atom className="w-4 h-4" />
-              </div>
-            )}
-            <div className="min-w-0">
-              <span className="font-black text-sm tracking-wide text-white group-hover:text-indigo-300 transition truncate block">
-                {branding.schoolName}
-              </span>
-              <span className="text-3xs text-indigo-300/90 font-mono tracking-wider truncate block">
-                {branding.subtitle}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setBrandingDraft(branding);
-                setIsBrandingModalOpen(true);
-              }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 transition cursor-pointer"
-              title="Tùy biến Logo và Hình nền Pano Banner"
+      {/* 1. THANH ĐIỀU HƯỚNG NỔI (ẨN HOÀN TOÀN KHI THÍ SINH ĐANG LÀM BÀI) */}
+      {!(appMode === 'student' && isRegistered && studentExamPhase === 'launch') && (
+        <header className="sticky top-0 z-40 px-3 sm:px-6 py-2.5 print:hidden">
+          <div className="max-w-7xl mx-auto backdrop-blur-xl bg-slate-900/90 border border-slate-800/80 rounded-2xl shadow-xl shadow-slate-950/20 px-4 py-2 flex items-center justify-between gap-4">
+            
+            <div 
+              onClick={() => setAppMode('home')}
+              className="flex items-center gap-3 cursor-pointer group select-none min-w-0"
+              title="Về Trang chủ Pano"
             >
-              <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
-              <span className="hidden md:inline">Đổi Pano / Logo</span>
-            </button>
+              {branding.logoUrl ? (
+                <img 
+                  src={branding.logoUrl} 
+                  alt="Logo" 
+                  className="w-8 h-8 rounded-xl object-contain bg-white/10 p-1 border border-white/20 group-hover:scale-105 transition shadow-sm shrink-0" 
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
+                  <Atom className="w-4 h-4" />
+                </div>
+              )}
+              <div className="min-w-0">
+                <span className="font-black text-sm tracking-wide text-white group-hover:text-indigo-300 transition truncate block">
+                  {branding.schoolName}
+                </span>
+                <span className="text-3xs text-indigo-300/90 font-mono tracking-wider truncate block">
+                  {branding.subtitle}
+                </span>
+              </div>
+            </div>
 
-            <div className="flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setAppMode('home')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                  appMode === 'home'
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
+                onClick={() => {
+                  setBrandingDraft(branding);
+                  setIsBrandingModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 transition cursor-pointer"
+                title="Tùy biến Logo và Hình nền Pano Banner"
               >
-                <Home className="w-3.5 h-3.5" />
-                <span>Trang chủ</span>
+                <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden md:inline">Đổi Pano / Logo</span>
               </button>
 
-              <button
-                type="button"
-                onClick={handleRequestTeacherMode}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                  appMode === 'teacher'
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-                title={isTeacherAuthenticated ? 'Bảng điều khiển Giáo viên' : 'Yêu cầu Mã PIN để truy cập'}
-              >
-                {isTeacherAuthenticated ? <LayoutDashboard className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
-                <span>Giáo viên</span>
-              </button>
+              <div className="flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setAppMode('home')}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                    appMode === 'home'
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Home className="w-3.5 h-3.5" />
+                  <span>Trang chủ</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setAppMode('student')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                  appMode === 'student'
-                    ? 'bg-emerald-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <GraduationCap className="w-3.5 h-3.5" />
-                <span>Học sinh</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={handleRequestTeacherMode}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                    appMode === 'teacher'
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title={isTeacherAuthenticated ? 'Bảng điều khiển Giáo viên' : 'Yêu cầu Mã PIN để truy cập'}
+                >
+                  {isTeacherAuthenticated ? <LayoutDashboard className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
+                  <span>Giáo viên</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setAppMode('student')}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                    appMode === 'student'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <GraduationCap className="w-3.5 h-3.5" />
+                  <span>Học sinh</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
-      {/* ========================================================================= */}
-      {/* CHẾ ĐỘ 1: CỔNG THÔNG TIN TRANG CHỦ                                        */}
-      {/* ========================================================================= */}
+      {/* CHẾ ĐỘ 1: TRANG CHỦ */}
       {appMode === 'home' && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 space-y-4 animate-in fade-in duration-300">
-          
           <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 border border-indigo-800/40 shadow-md backdrop-blur-md py-2.5 px-4 flex items-center gap-3 text-white group">
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-600 text-white font-black text-3xs uppercase tracking-wider shrink-0 shadow-sm border border-indigo-400/30">
               <Megaphone className="w-3.5 h-3.5 text-amber-300 animate-bounce" />
@@ -781,7 +819,6 @@ export default function App() {
                 setIsBrandingModalOpen(true);
               }}
               className="text-3xs text-indigo-300 hover:text-white underline font-semibold shrink-0 cursor-pointer hidden md:inline transition"
-              title="Nhấn để chỉnh sửa dòng chữ này"
             >
               Chỉnh sửa
             </button>
@@ -793,7 +830,6 @@ export default function App() {
               style={{ backgroundImage: `url(${branding.bannerUrl || PRESET_BANNERS[0].url})` }}
             />
             <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/80 to-indigo-950/70" />
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.25),transparent_50%)]" />
 
             <div className="relative z-10 p-5 sm:p-8 lg:p-10 max-w-4xl space-y-3.5">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-3xs sm:text-xs font-black backdrop-blur-md shadow-xs">
@@ -828,314 +864,201 @@ export default function App() {
                   <Lock className="w-4 h-4 text-amber-400" />
                   <span>Bảng Điều Khiển Giáo Viên</span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBrandingDraft(branding);
-                    setIsBrandingModalOpen(true);
-                  }}
-                  className="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs backdrop-blur-md border border-white/20 transition cursor-pointer flex items-center gap-1.5"
-                >
-                  <ImageIcon className="w-3.5 h-3.5 text-amber-300" />
-                  <span>Tùy biến Banner</span>
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            <div 
-              onClick={() => setAppMode('student')}
-              className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200/90 shadow-sm hover:shadow-xl transition-all cursor-pointer hover:-translate-y-1 space-y-3.5 group relative overflow-hidden"
-            >
-              <div className="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-black group-hover:scale-110 transition shadow-xs border border-emerald-100">
-                <GraduationCap className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-black text-base text-slate-900 group-hover:text-emerald-600 transition">
-                  Phòng Thi Trực Tuyến Học Sinh
-                </h3>
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  Thi trực tuyến với đầy đủ 3 phần thi theo cấu trúc Bộ GD&ĐT (Trắc nghiệm, Đúng/Sai, Điền số), KaTeX và tính năng giám sát thi tự động.
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5 text-xs font-black text-emerald-600 pt-1">
-                <span>Vào làm bài ngay</span>
-                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition" />
-              </div>
-            </div>
-
-            <div 
-              onClick={handleRequestTeacherMode}
-              className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200/90 shadow-sm hover:shadow-xl transition-all cursor-pointer hover:-translate-y-1 space-y-3.5 group relative overflow-hidden"
-            >
-              <div className="w-11 h-11 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black group-hover:scale-110 transition shadow-xs border border-indigo-100">
-                <Lock className="w-5 h-5 text-amber-500" />
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  <h3 className="font-black text-base text-slate-900 group-hover:text-indigo-600 transition">
-                    Hệ Thống Quản Trị Giáo Viên
-                  </h3>
-                  <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 text-3xs font-bold rounded">Bảo mật PIN</span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  Trọn bộ 6 Panel: Ngân hàng đề GDPT 2018, bóc tách Word, trộn đề, in ấn chuẩn A4 và đồng bộ dữ liệu MongoDB Atlas.
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5 text-xs font-black text-indigo-600 pt-1">
-                <span>Mở bảng điều khiển (Cần PIN)</span>
-                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition" />
-              </div>
-            </div>
-
-            <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200/90 shadow-sm space-y-3 relative overflow-hidden flex flex-col justify-between">
-              <div className="space-y-2.5">
-                <div className="w-11 h-11 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center font-black shadow-xs border border-amber-100">
-                  <BookOpen className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="px-2 py-0.5 rounded-md font-mono font-bold text-3xs bg-amber-100 text-amber-800">
-                      Mã: {activeCode}
-                    </span>
-                    <span className="text-3xs text-emerald-600 font-bold flex items-center gap-1">
-                      <ShieldCheck className="w-3 h-3" /> Đã sẵn sàng
-                    </span>
-                  </div>
-                  <h3 className="font-black text-sm text-slate-900 line-clamp-1">
-                    {safeCurrentExam.title}
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Thời lượng: {safeCurrentExam.durationMinutes || 45} phút • {safeCurrentExam.questions.length} câu hỏi
-                  </p>
-                </div>
-              </div>
-
-              <div className="pt-2 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAppMode('student')}
-                  className="flex-1 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs transition text-center cursor-pointer shadow-xs"
-                >
-                  Làm đề này
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleOpenPrint('exam_only')}
-                  className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-200 transition cursor-pointer"
-                  title="In đề thi này"
-                >
-                  <Printer className="w-3.5 h-3.5 text-indigo-600" />
-                </button>
               </div>
             </div>
           </section>
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* CÁC CHẾ ĐỘ LÀM VIỆC CHUYÊN SÂU                                           */}
-      {/* ========================================================================= */}
-      <main className="max-w-7xl mx-auto px-4 py-4 pb-16 print:p-0 print:m-0 print:max-w-none">
-        
-        {/* CHẾ ĐỘ 2: HỌC SINH LÀM BÀI / KẾT QUẢ */}
-        {appMode === 'student' && (
-          <div>
-            {isLoadingAssignedExam ? (
-              <div className="min-h-[50vh] flex flex-col items-center justify-center p-8 text-center space-y-4">
-                <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
-                <h3 className="font-bold text-base text-slate-800">Đang nạp đề thi được giao từ máy chủ...</h3>
-                <p className="text-xs text-slate-500 max-w-sm">Vui lòng chờ trong giây lát trong khi hệ thống đồng bộ toàn bộ câu hỏi và cấu trúc bài thi.</p>
-              </div>
-            ) : (
-              <>
-                {studentExamPhase === 'launch' && (
-                  <StudentExamLaunch
-                    exam={safeCurrentExam}
-                    antiCheatConfig={antiCheatConfig}
-                    candidateInfo={candidateInfo}
-                    timeRemainingSeconds={timeRemainingSeconds}
-                    onAnswerChange={handleAnswerChange}
-                    answers={answers || {}}
-                    flaggedQuestionIds={flaggedQuestionIds || new Set()}
-                    onToggleFlag={handleToggleFlag}
-                    currentQuestionIndex={currentQuestionIndex}
-                    onSelectQuestion={setCurrentQuestionIndex}
-                    onSubmitExam={handleSubmitExam}
-                    onRecordViolation={handleRecordViolation}
-                  />
-                )}
+      {/* CHẾ ĐỘ 2: HỌC SINH THI TRỰC TUYẾN */}
+      {appMode === 'student' && (
+        <main className="w-full px-2 sm:px-4 py-2">
+          {isLoadingAssignedExam ? (
+            <div className="min-h-[60vh] flex flex-col items-center justify-center p-8 text-center space-y-4">
+              <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
+              <h3 className="font-black text-lg text-slate-800">Đang tải đề thi từ máy chủ...</h3>
+              <p className="text-xs text-slate-500 max-w-sm">Hệ thống đang đồng bộ câu hỏi và cấu trúc bài thi về thiết bị của em.</p>
+            </div>
+          ) : !isRegistered ? (
+            /* ========================================================================= */
+            /* MÀN HÌNH BẮT BUỘC ĐĂNG KÝ: HỌ TÊN, LỚP, SBD TRƯỚC KHI VÀO ĐỀ THI          */
+            /* ========================================================================= */
+            <div className="min-h-[80vh] flex items-center justify-center p-4 animate-in fade-in duration-300">
+              <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-200 space-y-6">
+                
+                <div className="text-center space-y-2">
+                  <div className="w-16 h-16 rounded-3xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center mx-auto shadow-inner">
+                    <UserCheck className="w-8 h-8" />
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+                    Xác Nhận Thông Tin Thí Sinh
+                  </h2>
+                  <p className="text-xs text-slate-500 font-medium">
+                    {safeCurrentExam.title} (Mã đề: <span className="font-mono font-bold text-indigo-600">{activeCode}</span>)
+                  </p>
+                </div>
 
-                {studentExamPhase === 'student_results' && evaluation && (
-                  <ExamResults
-                    exam={safeCurrentExam}
-                    answers={answers || {}}
-                    evaluation={evaluation}
-                    candidateInfo={candidateInfo}
-                    timeRemainingSeconds={timeRemainingSeconds}
-                    auditLog={auditLog}
-                    onRetake={() => {
-                      setAnswers({});
-                      setStudentExamPhase('launch');
-                      setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
-                    }}
-                    onOpenTeacherMode={handleRequestTeacherMode}
-                    onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
-                  />
-                )}
-              </>
-            )}
-          </div>
-        )}
+                <form onSubmit={handleStartExamWithRegistration} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
+                      Họ và tên thí sinh <span className="text-rose-500">*</span>:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={candidateInfo.name}
+                      onChange={(e) => setCandidateInfo({ ...candidateInfo, name: e.target.value })}
+                      placeholder="Ví dụ: Nguyễn Văn An"
+                      className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition"
+                    />
+                  </div>
 
-        {/* CHẾ ĐỘ 3: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
-        {appMode === 'teacher' && (
-          <TeacherDashboard
-            exam={safeCurrentExam}
-            currentExam={safeCurrentExam}
-            activeCode={activeCode}
-            availableCodes={availableCodes}
-            onSelectExamCode={handleSelectExamCode}
-            bundle={bundle}
-            onApplyBundle={handleApplyBundle}
-            onSelectExamPackage={handleLoadExamFromBank}
-            onUpdateExam={handleUpdateExamDirectly}
-            submissions={submissions || []}
-            onDeleteSubmission={handleDeleteSubmission}
-            onClearSubmissions={handleClearSubmissions}
-            antiCheatConfig={antiCheatConfig}
-            onChangeAntiCheatConfig={setAntiCheatConfig}
-            assignments={assignments}
-            onAssignExam={handleAssignExam}
-            onDeleteAssignment={handleDeleteAssignment}
-            onOpenPrint={handleOpenPrint}
-            onOpenPrintMatrix={handleOpenPrintMatrix}
-            onOpenTeacherJsonModal={handleOpenJsonModal}
-            onPreviewAsStudent={() => setAppMode('student')}
-            onNavigateHome={() => setAppMode('home')}
-          />
-        )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
+                        Lớp <span className="text-rose-500">*</span>:
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={candidateInfo.studentClass}
+                        onChange={(e) => setCandidateInfo({ ...candidateInfo, studentClass: e.target.value })}
+                        placeholder="Ví dụ: 10A1"
+                        className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition"
+                      />
+                    </div>
 
-        {/* CHẾ ĐỘ 4: IN ẤN */}
-        {appMode === 'print' && (
-          <div className="bg-white p-6 sm:p-10 rounded-3xl shadow-sm border border-slate-200 print:border-none print:shadow-none print:p-0">
-            <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
-              <button
-                type="button"
-                onClick={handleRequestTeacherMode}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs cursor-pointer"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                <span>Quay lại Bảng điều khiển</span>
-              </button>
+                    <div>
+                      <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
+                        Số báo danh (SBD) <span className="text-rose-500">*</span>:
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={candidateInfo.candidateNumber}
+                        onChange={(e) => setCandidateInfo({ ...candidateInfo, candidateNumber: e.target.value })}
+                        placeholder="Ví dụ: 1001"
+                        className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition font-mono"
+                      />
+                    </div>
+                  </div>
 
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-500 mr-2">
-                  Chế độ: {activePrintMode === 'exam_only' ? 'Đề thi chuẩn A4' : activePrintMode === 'exam_with_solutions' ? 'Đề thi kèm Lời giải' : 'Ma trận đáp án các mã đề'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm cursor-pointer"
-                >
-                  <Printer className="w-4 h-4" />
-                  <span>Xác nhận In ngay (Print)</span>
-                </button>
+                  <div className="p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-100 text-3xs text-indigo-900 space-y-1">
+                    <div className="font-bold flex items-center gap-1.5 text-xs text-indigo-700">
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      <span>Quy chế thi trực tuyến:</span>
+                    </div>
+                    <p>• Khi bấm bắt đầu, hệ thống sẽ kích hoạt <strong>Toàn màn hình</strong> để tối đa hóa diện tích và kích hoạt giám sát thi.</p>
+                    <p>• Thí sinh tuyệt đối không thoát toàn màn hình hay rời trang thi khi chưa nộp bài.</p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm shadow-xl shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    <span>Bắt Đầu Làm Bài Thi Ngay</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </form>
               </div>
             </div>
+          ) : (
+            <>
+              {studentExamPhase === 'launch' && (
+                <StudentExamLaunch
+                  exam={safeCurrentExam}
+                  antiCheatConfig={antiCheatConfig}
+                  candidateInfo={candidateInfo}
+                  timeRemainingSeconds={timeRemainingSeconds}
+                  onAnswerChange={handleAnswerChange}
+                  answers={answers || {}}
+                  flaggedQuestionIds={flaggedQuestionIds || new Set()}
+                  onToggleFlag={handleToggleFlag}
+                  currentQuestionIndex={currentQuestionIndex}
+                  onSelectQuestion={setCurrentQuestionIndex}
+                  onSubmitExam={handleSubmitExam}
+                  onRecordViolation={handleRecordViolation}
+                />
+              )}
 
-            {activePrintMode === 'matrix' ? (
-              <div className="space-y-6">
-                <div className="text-center pb-4 border-b">
-                  <h2 className="text-lg font-black uppercase tracking-wider">BẢNG MA TRẬN ĐÁP ÁN CÁC MÃ ĐỀ TRỘN</h2>
-                  <p className="text-xs text-slate-600 mt-1">{safeCurrentExam.title} • Thời gian: {safeCurrentExam.durationMinutes || 45} phút</p>
-                </div>
-                {bundle && Array.isArray(bundle.variants) ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs text-center border-collapse border border-slate-300">
-                      <thead>
-                        <tr className="bg-slate-100 font-bold">
-                          <th className="border border-slate-300 p-2">Câu hỏi</th>
-                          {bundle.variants.map((v: any) => (
-                            <th key={v.code} className="border border-slate-300 p-2">Mã {v.code}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {safeCurrentExam.questions.map((q: any, idx: number) => (
-                          <tr key={q.id || idx} className="hover:bg-slate-50">
-                            <td className="border border-slate-300 p-2 font-bold">Câu {idx + 1}</td>
-                            {bundle.variants.map((v: any) => {
-                              const varQ = (v.examData || v).questions?.[idx];
-                              return (
-                                <td key={v.code} className="border border-slate-300 p-2 font-mono font-bold text-indigo-700">
-                                  {varQ?.correctAnswer || '-'}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="text-center text-slate-500 py-6">Chưa có gói mã đề trộn. Vui lòng vào Panel 3 thực hiện trộn đề trước.</p>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-6">
-                <div className="flex justify-between items-start pb-4 border-b-2 border-slate-900">
-                  <div className="text-center">
-                    <p className="text-xs uppercase font-bold">SỞ GIÁO DỤC VÀ ĐÀO TẠO</p>
-                    <p className="text-sm uppercase font-black">TRƯỜNG THPT CHUYÊN</p>
-                    <p className="text-3xs italic">(Đề thi gồm {safeCurrentExam.questions.length} câu)</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-sm font-black uppercase">{safeCurrentExam.title}</p>
-                    <p className="text-xs font-semibold">NĂM HỌC 2025 - 2026 • MÔN: VẬT LÍ</p>
-                    <p className="text-xs">Thời gian làm bài: {safeCurrentExam.durationMinutes || 45} phút</p>
-                  </div>
-                  <div className="border border-slate-800 px-3 py-1 rounded text-center">
-                    <p className="text-3xs font-bold uppercase">MÃ ĐỀ THI</p>
-                    <p className="text-base font-black font-mono">{activeCode}</p>
-                  </div>
-                </div>
+              {studentExamPhase === 'student_results' && evaluation && (
+                <ExamResults
+                  exam={safeCurrentExam}
+                  answers={answers || {}}
+                  evaluation={evaluation}
+                  candidateInfo={candidateInfo}
+                  timeRemainingSeconds={timeRemainingSeconds}
+                  auditLog={auditLog}
+                  onRetake={() => {
+                    setAnswers({});
+                    setStudentExamPhase('launch');
+                    setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
+                  }}
+                  onOpenTeacherMode={handleRequestTeacherMode}
+                  onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
+                />
+              )}
+            </>
+          )}
+        </main>
+      )}
 
-                <div className="space-y-5 pt-2">
-                  {safeCurrentExam.questions.map((q: any, idx: number) => (
-                    <div key={q.id || idx} className="space-y-2 text-sm leading-relaxed">
-                      <p className="font-semibold text-slate-900">
-                        <span className="font-black text-indigo-900">Câu {idx + 1}: </span>
-                        {q.prompt || q.stem || ''}
-                      </p>
-                      {Array.isArray(q.options) && (
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 pl-4 text-xs font-medium">
-                          {q.options.map((opt: any) => (
-                            <div key={opt.id || opt.label} className="flex items-center gap-1.5">
-                              <span className="font-bold">{opt.label}.</span>
-                              <span>{opt.text}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {activePrintMode === 'exam_with_solutions' && q.explanation && (
-                        <div className="mt-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs italic text-slate-700">
-                          <span className="font-bold text-emerald-700 not-italic">Hướng dẫn giải: </span>
-                          {q.explanation}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+      {/* CHẾ ĐỘ 3: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
+      {appMode === 'teacher' && (
+        <TeacherDashboard
+          exam={safeCurrentExam}
+          currentExam={safeCurrentExam}
+          activeCode={activeCode}
+          availableCodes={availableCodes}
+          onSelectExamCode={handleSelectExamCode}
+          bundle={bundle}
+          onApplyBundle={handleApplyBundle}
+          onSelectExamPackage={handleLoadExamFromBank}
+          onUpdateExam={handleUpdateExamDirectly}
+          submissions={submissions || []}
+          onDeleteSubmission={handleDeleteSubmission}
+          onClearSubmissions={handleClearSubmissions}
+          antiCheatConfig={antiCheatConfig}
+          onChangeAntiCheatConfig={setAntiCheatConfig}
+          assignments={assignments}
+          onAssignExam={handleAssignExam}
+          onDeleteAssignment={handleDeleteAssignment}
+          onOpenPrint={handleOpenPrint}
+          onOpenPrintMatrix={handleOpenPrintMatrix}
+          onOpenTeacherJsonModal={handleOpenJsonModal}
+          onPreviewAsStudent={() => {
+            setIsRegistered(false);
+            setAppMode('student');
+          }}
+          onNavigateHome={() => setAppMode('home')}
+        />
+      )}
+
+      {/* CHẾ ĐỘ 4: IN ẤN */}
+      {appMode === 'print' && (
+        <div className="bg-white p-6 sm:p-10 rounded-3xl shadow-sm border border-slate-200 print:border-none print:shadow-none print:p-0">
+          <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
+            <button
+              type="button"
+              onClick={handleRequestTeacherMode}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Quay lại Bảng điều khiển</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm cursor-pointer"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Xác nhận In ngay</span>
+            </button>
           </div>
-        )}
-      </main>
+        </div>
+      )}
 
-      {/* MODAL NHẬP MÃ PIN BẢO MẬT GIÁO VIÊN */}
+      {/* MODAL MÃ PIN GIÁO VIÊN */}
       {isPinModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 print:hidden animate-in fade-in duration-200">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-5">
@@ -1145,31 +1068,26 @@ export default function App() {
 
             <div>
               <h3 className="font-black text-slate-900 text-lg">Xác Thực Quyền Giáo Viên</h3>
-              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                Khu vực quản trị chỉ dành cho Giáo viên. Vui lòng nhập mã PIN bảo mật để tiếp tục.
-              </p>
+              <p className="text-xs text-slate-500 mt-1">Vui lòng nhập mã PIN bảo mật để tiếp tục.</p>
             </div>
 
             <form onSubmit={handleVerifyTeacherPin} className="space-y-4">
-              <div>
-                <input
-                  type="password"
-                  autoFocus
-                  maxLength={10}
-                  value={enteredPin}
-                  onChange={(e) => {
-                    setEnteredPin(e.target.value);
-                    setPinError(null);
-                  }}
-                  placeholder="Nhập mã PIN (Mặc định: 123456)"
-                  className="w-full px-4 py-3 text-center tracking-widest text-lg font-black rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none transition"
-                />
-              </div>
+              <input
+                type="password"
+                autoFocus
+                maxLength={10}
+                value={enteredPin}
+                onChange={(e) => {
+                  setEnteredPin(e.target.value);
+                  setPinError(null);
+                }}
+                placeholder="Nhập mã PIN (Mặc định: 123456)"
+                className="w-full px-4 py-3 text-center tracking-widest text-lg font-black rounded-2xl border border-slate-300 focus:border-indigo-600 outline-none transition"
+              />
 
               {pinError && (
-                <div className="flex items-center gap-1.5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold text-left">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{pinError}</span>
+                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+                  {pinError}
                 </div>
               )}
 
@@ -1177,285 +1095,18 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsPinModalOpen(false)}
-                  className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer transition"
+                  className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
                 >
-                  Hủy bỏ
+                  Hủy
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/30 cursor-pointer transition"
+                  className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 shadow-md cursor-pointer"
                 >
                   Xác nhận
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL CÀI ĐẶT PANO BANNER, LOGO & DÒNG CHỮ CHUYỂN ĐỘNG */}
-      {isBrandingModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 print:hidden animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-slate-200 space-y-6 max-h-[90vh] overflow-y-auto">
-            
-            <div className="flex items-center justify-between border-b pb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
-                  <ImageIcon className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-black text-slate-900 text-lg">Tùy Biến Giao Diện Trang Chủ</h3>
-                  <p className="text-xs text-slate-500">Cá nhân hóa Logo, Pano Banner và Dòng chữ thông điệp chuyển động</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setIsBrandingModalOpen(false)} 
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 flex items-center justify-center cursor-pointer transition"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-5 text-xs">
-              <div className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100 space-y-2">
-                <div className="flex items-center gap-2">
-                  <Megaphone className="w-4 h-4 text-indigo-600" />
-                  <label className="font-black text-indigo-950 uppercase text-3xs tracking-wider">
-                    Dòng Chữ Chuyển Động (Thông báo / Truyền cảm hứng):
-                  </label>
-                </div>
-                <textarea
-                  rows={2}
-                  value={brandingDraft.tickerText || ''}
-                  onChange={(e) => setBrandingDraft({ ...brandingDraft, tickerText: e.target.value })}
-                  placeholder="Nhập thông báo ngày thi, dặn dò học sinh hoặc câu nói truyền cảm hứng..."
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-indigo-200 focus:border-indigo-600 outline-none font-medium text-xs bg-white text-slate-800 transition resize-none"
-                />
-                <p className="text-3xs text-slate-500 italic">
-                  * Dòng chữ này sẽ chuyển động liên tục tại khe giữa thanh tiêu đề và Banner trên trang chủ.
-                </p>
-              </div>
-
-              <div>
-                <label className="block font-black text-slate-700 mb-1.5 uppercase text-3xs tracking-wider">
-                  Tên Trường / Tổ Bộ Môn:
-                </label>
-                <input
-                  type="text"
-                  value={brandingDraft.schoolName}
-                  onChange={(e) => setBrandingDraft({ ...brandingDraft, schoolName: e.target.value })}
-                  placeholder="Ví dụ: TRƯỜNG THPT HÙNG VƯƠNG"
-                  className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-indigo-600 outline-none font-bold text-sm bg-slate-50 focus:bg-white transition"
-                />
-              </div>
-
-              <div>
-                <label className="block font-black text-slate-700 mb-1.5 uppercase text-3xs tracking-wider">
-                  Khẩu hiệu / Tiêu đề phụ:
-                </label>
-                <input
-                  type="text"
-                  value={brandingDraft.subtitle}
-                  onChange={(e) => setBrandingDraft({ ...brandingDraft, subtitle: e.target.value })}
-                  placeholder="Ví dụ: HỆ THỐNG KHẢO THÍ VẬT LÍ TRỰC TUYẾN • CHƯƠNG TRÌNH GDPT 2018"
-                  className="w-full px-4 py-3 rounded-2xl border border-slate-200 focus:border-indigo-600 outline-none font-medium text-xs bg-slate-50 focus:bg-white transition"
-                />
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="font-black text-slate-800 uppercase text-3xs tracking-wider">
-                    Logo Nhà Trường / Watermark:
-                  </label>
-                  {brandingDraft.logoUrl && (
-                    <button
-                      type="button"
-                      onClick={() => setBrandingDraft({ ...brandingDraft, logoUrl: '' })}
-                      className="text-rose-600 hover:text-rose-700 font-bold text-3xs cursor-pointer"
-                    >
-                      Xóa Logo
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="text"
-                    value={brandingDraft.logoUrl}
-                    onChange={(e) => setBrandingDraft({ ...brandingDraft, logoUrl: e.target.value })}
-                    placeholder="Dán URL Logo hoặc bấm tải tệp từ máy..."
-                    className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none bg-white font-mono text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => logoInputRef.current?.click()}
-                    className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition shrink-0"
-                  >
-                    <UploadCloud className="w-4 h-4" />
-                    <span>Tải tệp ảnh</span>
-                  </button>
-                  <input
-                    ref={logoInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handleFileUpload(e, 'logoUrl')}
-                    className="hidden"
-                  />
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
-                <label className="font-black text-slate-800 uppercase text-3xs tracking-wider block">
-                  Chọn Mẫu Pano Banner Vật Lí Đẹp Sẵn Có:
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  {PRESET_BANNERS.map((preset) => {
-                    const isSelected = brandingDraft.bannerUrl === preset.url;
-                    return (
-                      <button
-                        key={preset.name}
-                        type="button"
-                        onClick={() => setBrandingDraft({ ...brandingDraft, bannerUrl: preset.url })}
-                        className={`relative rounded-xl overflow-hidden border-2 aspect-video group cursor-pointer transition ${
-                          isSelected ? 'border-indigo-600 ring-2 ring-indigo-600/30' : 'border-slate-200 hover:border-slate-300'
-                        }`}
-                      >
-                        <img src={preset.url} alt={preset.name} className="w-full h-full object-cover group-hover:scale-110 transition duration-300" />
-                        <div className="absolute inset-0 bg-slate-950/40 flex items-center justify-center p-1 text-center">
-                          <span className="text-white text-3xs font-bold leading-tight drop-shadow-md">{preset.name}</span>
-                        </div>
-                        {isSelected && (
-                          <div className="absolute top-1 right-1 bg-indigo-600 text-white rounded-full p-0.5 shadow-md">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div className="pt-2">
-                  <label className="font-bold text-slate-600 block mb-1">
-                    Hoặc dán URL / Tải tệp Pano riêng của Thầy:
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="text"
-                      value={brandingDraft.bannerUrl}
-                      onChange={(e) => setBrandingDraft({ ...brandingDraft, bannerUrl: e.target.value })}
-                      placeholder="Dán đường dẫn URL banner..."
-                      className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 focus:border-indigo-600 outline-none bg-white font-mono text-xs"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => bannerInputRef.current?.click()}
-                      className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition shrink-0"
-                    >
-                      <UploadCloud className="w-4 h-4" />
-                      <span>Tải ảnh</span>
-                    </button>
-                    <input
-                      ref={bannerInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => handleFileUpload(e, 'bannerUrl')}
-                      className="hidden"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setBrandingDraft(DEFAULT_BRANDING)}
-                className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-800 cursor-pointer font-bold"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Khôi phục mặc định</span>
-              </button>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsBrandingModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveBranding}
-                  className="px-6 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/30 cursor-pointer transition hover:scale-105 active:scale-95"
-                >
-                  Lưu & Áp Dụng Ngay
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL QUẢN LÝ JSON */}
-      {isJsonModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
-          <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden shadow-2xl border border-slate-200">
-            <div className="p-5 bg-slate-900 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Code className="w-5 h-5 text-indigo-400" />
-                <h4 className="font-bold text-sm">Quản lý Cấu trúc Đề thi JSON</h4>
-              </div>
-              <button 
-                onClick={() => setIsJsonModalOpen(false)} 
-                className="text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-4 flex-1 overflow-hidden flex flex-col gap-3">
-              <div className="flex items-center justify-between text-xs text-slate-500">
-                <span>Thầy có thể sao chép hoặc dán cấu trúc JSON mới để cập nhật đề thi:</span>
-                <button
-                  type="button"
-                  onClick={handleCopyJson}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold cursor-pointer"
-                >
-                  {jsonCopied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4 text-indigo-600" />}
-                  <span>{jsonCopied ? 'Đã sao chép!' : 'Sao chép JSON'}</span>
-                </button>
-              </div>
-
-              {jsonError && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
-                  {jsonError}
-                </div>
-              )}
-
-              <textarea
-                value={jsonText}
-                onChange={(e) => setJsonText(e.target.value)}
-                className="w-full flex-1 p-4 rounded-2xl bg-slate-900 text-emerald-400 font-mono text-xs outline-none border border-slate-800 resize-none min-h-[300px]"
-                spellCheck={false}
-              />
-            </div>
-
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setIsJsonModalOpen(false)}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-200 transition cursor-pointer"
-              >
-                Đóng
-              </button>
-              <button
-                type="button"
-                onClick={handleApplyJson}
-                className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition cursor-pointer shadow-sm"
-              >
-                Áp dụng JSON vào hệ thống
-              </button>
-            </div>
           </div>
         </div>
       )}
