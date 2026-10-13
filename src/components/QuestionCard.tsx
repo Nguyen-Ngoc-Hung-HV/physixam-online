@@ -130,15 +130,15 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
     );
   };
 
-  // 3. PHẦN III: TRẢ LỜI NGẮN
+  // 3. PHẦN III: TRẢ LỜI NGẮN (ĐÃ BỎ CỤM TỪ TRONG NGOẶC THEO YÊU CẦU)
   const renderShortAnswer = () => {
     const rawVal = typeof currentAnswer === 'object' && currentAnswer !== null ? currentAnswer.value : currentAnswer;
     const value = rawVal !== undefined && rawVal !== null ? String(rawVal) : '';
 
     return (
       <div className="mt-4 p-4 rounded-2xl bg-slate-50 border border-slate-200">
-        <label className="block text-xs font-bold text-slate-600 mb-2">
-          Nhập đáp số (số hoặc phân số/thập phân ngắn gọn):
+        <label className="block text-xs font-bold text-slate-700 mb-2">
+          Nhập đáp số:
         </label>
         <input
           type="text"
