@@ -9,7 +9,7 @@ import {
   Home, LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
   Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, 
   UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, CheckCircle2,
-  Lock, KeyRound, AlertCircle, Megaphone, Flame, Radio
+  Lock, KeyRound, AlertCircle, Megaphone, Loader2
 } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
@@ -93,6 +93,7 @@ export default function App() {
   });
 
   const [activePrintMode, setActivePrintMode] = useState<'exam_only' | 'exam_with_solutions' | 'matrix'>('exam_only');
+  const [isLoadingAssignedExam, setIsLoadingAssignedExam] = useState<boolean>(false);
 
   const [isTeacherAuthenticated, setIsTeacherAuthenticated] = useState<boolean>(() => {
     try {
@@ -128,9 +129,7 @@ export default function App() {
           return parsed;
         }
       }
-    } catch (e) {
-      console.warn("Lỗi đọc cache đề thi, nạp đề mặc định:", e);
-    }
+    } catch (e) {}
     return DEFAULT_EXAM;
   });
 
@@ -195,15 +194,89 @@ export default function App() {
     maxViolations: 5
   } as any);
 
+  // TỰ ĐỘNG NẠP ĐỀ THI ĐÃ GIAO KHI HỌC SINH MỞ LINK / QUÉT QR
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const targetCode = params.get('code') || params.get('variant');
-      if (targetCode) {
-        handleSelectExamCode(targetCode);
+    const resolveAssignedExam = async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const searchCode = params.get('code') || params.get('variant');
+        const assignId = params.get('assign') || params.get('assignmentId');
+        const examId = params.get('exam') || params.get('examId') || params.get('packageId');
+
+        const targetIdentifier = (searchCode || assignId || examId || '').trim().toUpperCase();
+        if (!targetIdentifier) return;
+
+        setIsLoadingAssignedExam(true);
+
+        // 1. Kiểm tra trong danh sách assignments cục bộ
+        const matchedAssign: any = assignments.find((a: any) => {
+          const aId = String(a?.id || '').toUpperCase();
+          const aCode = String(a?.code || a?.examCode || '').toUpperCase();
+          return aId === targetIdentifier || aCode === targetIdentifier;
+        });
+
+        if (matchedAssign && matchedAssign.examData && Array.isArray(matchedAssign.examData.questions) && matchedAssign.examData.questions.length > 0) {
+          const target = matchedAssign.examData;
+          setExam(target);
+          setActiveCode(matchedAssign.code || matchedAssign.examCode || target.code || '101');
+          setTimeRemainingSeconds((target.durationMinutes || 45) * 60);
+          setAnswers({});
+          setFlaggedQuestionIds(new Set());
+          setCurrentQuestionIndex(0);
+          safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', JSON.stringify(target)) : localStorage.setItem('physixam_current_exam', JSON.stringify(target));
+          setIsLoadingAssignedExam(false);
+          return;
+        }
+
+        // 2. Kiểm tra nếu trong localStorage đã có đề đang mở
+        try {
+          const savedCurrent = safeStorage?.getItem ? safeStorage.getItem('physixam_current_exam') : localStorage.getItem('physixam_current_exam');
+          if (savedCurrent) {
+            const parsed = JSON.parse(savedCurrent);
+            if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+              const pCode = String(parsed.code || '').toUpperCase();
+              if (pCode === targetIdentifier || !targetIdentifier) {
+                setExam(parsed);
+                setActiveCode(parsed.code || '101');
+                setTimeRemainingSeconds((parsed.durationMinutes || 45) * 60);
+                setIsLoadingAssignedExam(false);
+                return;
+              }
+            }
+          }
+        } catch (e) {}
+
+        // 3. Gọi API lấy đề thi từ MongoDB Atlas
+        try {
+          const response = await fetch(`/api/assignments?code=${encodeURIComponent(targetIdentifier)}`);
+          if (response.ok) {
+            const data = await response.json();
+            const targetExam = data?.examData || data?.exam || data;
+            if (targetExam && Array.isArray(targetExam.questions) && targetExam.questions.length > 0) {
+              setExam(targetExam);
+              setActiveCode(targetExam.code || searchCode || '101');
+              setTimeRemainingSeconds((targetExam.durationMinutes || 45) * 60);
+              setAnswers({});
+              setFlaggedQuestionIds(new Set());
+              setCurrentQuestionIndex(0);
+              safeStorage?.setItem ? safeStorage.setItem('physixam_current_exam', JSON.stringify(targetExam)) : localStorage.setItem('physixam_current_exam', JSON.stringify(targetExam));
+              setIsLoadingAssignedExam(false);
+              return;
+            }
+          }
+        } catch (apiErr) {
+          console.warn('Không thể nạp đề thi từ API:', apiErr);
+        }
+
+        setIsLoadingAssignedExam(false);
+      } catch (err) {
+        console.warn('Lỗi xử lý URL đề thi:', err);
+        setIsLoadingAssignedExam(false);
       }
-    } catch (e) {}
-  }, []);
+    };
+
+    resolveAssignedExam();
+  }, [assignments]);
 
   useEffect(() => {
     const fetchSubmissionsFromMongo = async () => {
@@ -391,9 +464,14 @@ export default function App() {
     setTimeout(() => setJsonCopied(false), 2000);
   };
 
-  const handleAssignExam = (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
+  const handleAssignExam = async (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
+    const fullAssignment: any = {
+      ...assignment,
+      examData: pkg.examData
+    };
+
     setAssignments((prev) => {
-      const updated = [assignment, ...prev.filter((a) => a.id !== assignment.id)];
+      const updated = [fullAssignment, ...prev.filter((a) => a.id !== assignment.id)];
       try {
         localStorage.setItem('physixam_assignments', JSON.stringify(updated));
       } catch (e) {}
@@ -401,6 +479,15 @@ export default function App() {
     });
 
     handleLoadExamFromBank(pkg);
+
+    try {
+      fetch('/api/assignments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fullAssignment)
+      }).catch((e) => console.warn('Lỗi ghi đề thi đã giao lên server:', e));
+    } catch (e) {}
+
     if (switchToStudent) setAppMode('student');
   };
 
@@ -562,7 +649,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans antialiased selection:bg-indigo-500 selection:text-white">
       
-      {/* CSS NHÚNG NỘI TUYẾN DÀNH CHO DÒNG CHỮ CHUYỂN ĐỘNG VÀ ĐỨNG YÊN KHI HOVER */}
       <style>{`
         @keyframes marqueeScroll {
           0% { transform: translateX(0%); }
@@ -582,7 +668,6 @@ export default function App() {
       <header className="sticky top-0 z-40 px-3 sm:px-6 py-2.5 print:hidden">
         <div className="max-w-7xl mx-auto backdrop-blur-xl bg-slate-900/90 border border-slate-800/80 rounded-2xl shadow-xl shadow-slate-950/20 px-4 py-2 flex items-center justify-between gap-4">
           
-          {/* Logo & Tên đơn vị */}
           <div 
             onClick={() => setAppMode('home')}
             className="flex items-center gap-3 cursor-pointer group select-none min-w-0"
@@ -592,10 +677,10 @@ export default function App() {
               <img 
                 src={branding.logoUrl} 
                 alt="Logo" 
-                className="w-9 h-9 rounded-xl object-contain bg-white/10 p-1 border border-white/20 group-hover:scale-105 transition shadow-sm shrink-0" 
+                className="w-8 h-8 rounded-xl object-contain bg-white/10 p-1 border border-white/20 group-hover:scale-105 transition shadow-sm shrink-0" 
               />
             ) : (
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
                 <Atom className="w-4 h-4" />
               </div>
             )}
@@ -609,7 +694,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Cụm nút chuyển tab */}
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -675,19 +759,13 @@ export default function App() {
       {appMode === 'home' && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 space-y-4 animate-in fade-in duration-300">
           
-          {/* ===================================================================== */}
-          {/* ⚡ HIỆU ỨNG NỔI BẬT: DẢI CHỮ CHUYỂN ĐỘNG (TICKER MARQUEE BANNER)        */}
-          {/* ===================================================================== */}
           <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 border border-indigo-800/40 shadow-md backdrop-blur-md py-2.5 px-4 flex items-center gap-3 text-white group">
-            
-            {/* Nhãn Huy hiệu Thông Báo cố định bên trái */}
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-600 text-white font-black text-3xs uppercase tracking-wider shrink-0 shadow-sm border border-indigo-400/30">
               <Megaphone className="w-3.5 h-3.5 text-amber-300 animate-bounce" />
               <span className="hidden sm:inline">Thông Điệp Khảo Thí</span>
               <span className="sm:hidden">Tin Mới</span>
             </div>
 
-            {/* Khung chuyển động vô tận (Marquee) */}
             <div className="flex-1 overflow-hidden relative select-none">
               <div className="marquee-track flex items-center gap-8 font-medium text-xs text-indigo-100 cursor-default">
                 <span>{branding.tickerText || DEFAULT_BRANDING.tickerText}</span>
@@ -696,7 +774,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Nút bấm chỉnh sửa nhanh dòng chữ */}
             <button
               type="button"
               onClick={() => {
@@ -710,9 +787,7 @@ export default function App() {
             </button>
           </div>
 
-          {/* PANO BANNER HERO CARD THU GỌN 2/3 */}
           <section className="relative rounded-3xl overflow-hidden shadow-xl border border-indigo-900/40 bg-slate-950 min-h-[250px] sm:min-h-[290px] flex items-center">
-            
             <div 
               className="absolute inset-0 bg-cover bg-center transition-all duration-700 filter brightness-75 scale-105"
               style={{ backgroundImage: `url(${branding.bannerUrl || PRESET_BANNERS[0].url})` }}
@@ -721,7 +796,6 @@ export default function App() {
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.25),transparent_50%)]" />
 
             <div className="relative z-10 p-5 sm:p-8 lg:p-10 max-w-4xl space-y-3.5">
-              
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-3xs sm:text-xs font-black backdrop-blur-md shadow-xs">
                 <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 <span>PhysiXam Online • Khảo thí Vật lí Chuẩn GDPT 2018</span>
@@ -770,9 +844,7 @@ export default function App() {
             </div>
           </section>
 
-          {/* 3 THẺ ĐIỀU HƯỚNG TỔNG QUAN */}
           <section className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            
             <div 
               onClick={() => setAppMode('student')}
               className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200/90 shadow-sm hover:shadow-xl transition-all cursor-pointer hover:-translate-y-1 space-y-3.5 group relative overflow-hidden"
@@ -859,7 +931,6 @@ export default function App() {
                 </button>
               </div>
             </div>
-
           </section>
         </div>
       )}
@@ -872,39 +943,49 @@ export default function App() {
         {/* CHẾ ĐỘ 2: HỌC SINH LÀM BÀI / KẾT QUẢ */}
         {appMode === 'student' && (
           <div>
-            {studentExamPhase === 'launch' && (
-              <StudentExamLaunch
-                exam={safeCurrentExam}
-                antiCheatConfig={antiCheatConfig}
-                candidateInfo={candidateInfo}
-                timeRemainingSeconds={timeRemainingSeconds}
-                onAnswerChange={handleAnswerChange}
-                answers={answers || {}}
-                flaggedQuestionIds={flaggedQuestionIds || new Set()}
-                onToggleFlag={handleToggleFlag}
-                currentQuestionIndex={currentQuestionIndex}
-                onSelectQuestion={setCurrentQuestionIndex}
-                onSubmitExam={handleSubmitExam}
-                onRecordViolation={handleRecordViolation}
-              />
-            )}
+            {isLoadingAssignedExam ? (
+              <div className="min-h-[50vh] flex flex-col items-center justify-center p-8 text-center space-y-4">
+                <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
+                <h3 className="font-bold text-base text-slate-800">Đang nạp đề thi được giao từ máy chủ...</h3>
+                <p className="text-xs text-slate-500 max-w-sm">Vui lòng chờ trong giây lát trong khi hệ thống đồng bộ toàn bộ câu hỏi và cấu trúc bài thi.</p>
+              </div>
+            ) : (
+              <>
+                {studentExamPhase === 'launch' && (
+                  <StudentExamLaunch
+                    exam={safeCurrentExam}
+                    antiCheatConfig={antiCheatConfig}
+                    candidateInfo={candidateInfo}
+                    timeRemainingSeconds={timeRemainingSeconds}
+                    onAnswerChange={handleAnswerChange}
+                    answers={answers || {}}
+                    flaggedQuestionIds={flaggedQuestionIds || new Set()}
+                    onToggleFlag={handleToggleFlag}
+                    currentQuestionIndex={currentQuestionIndex}
+                    onSelectQuestion={setCurrentQuestionIndex}
+                    onSubmitExam={handleSubmitExam}
+                    onRecordViolation={handleRecordViolation}
+                  />
+                )}
 
-            {studentExamPhase === 'student_results' && evaluation && (
-              <ExamResults
-                exam={safeCurrentExam}
-                answers={answers || {}}
-                evaluation={evaluation}
-                candidateInfo={candidateInfo}
-                timeRemainingSeconds={timeRemainingSeconds}
-                auditLog={auditLog}
-                onRetake={() => {
-                  setAnswers({});
-                  setStudentExamPhase('launch');
-                  setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
-                }}
-                onOpenTeacherMode={handleRequestTeacherMode}
-                onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
-              />
+                {studentExamPhase === 'student_results' && evaluation && (
+                  <ExamResults
+                    exam={safeCurrentExam}
+                    answers={answers || {}}
+                    evaluation={evaluation}
+                    candidateInfo={candidateInfo}
+                    timeRemainingSeconds={timeRemainingSeconds}
+                    auditLog={auditLog}
+                    onRetake={() => {
+                      setAnswers({});
+                      setStudentExamPhase('launch');
+                      setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
+                    }}
+                    onOpenTeacherMode={handleRequestTeacherMode}
+                    onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
+                  />
+                )}
+              </>
             )}
           </div>
         )}
@@ -1136,8 +1217,6 @@ export default function App() {
             </div>
 
             <div className="space-y-5 text-xs">
-              
-              {/* Dòng chữ chuyển động */}
               <div className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100 space-y-2">
                 <div className="flex items-center gap-2">
                   <Megaphone className="w-4 h-4 text-indigo-600" />
@@ -1183,7 +1262,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Tải Logo */}
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="font-black text-slate-800 uppercase text-3xs tracking-wider">
@@ -1225,7 +1303,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Chọn Pano Banner */}
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-3">
                 <label className="font-black text-slate-800 uppercase text-3xs tracking-wider block">
                   Chọn Mẫu Pano Banner Vật Lí Đẹp Sẵn Có:
@@ -1286,7 +1363,6 @@ export default function App() {
                   </div>
                 </div>
               </div>
-
             </div>
 
             <div className="flex items-center justify-between pt-4 border-t border-slate-100">
