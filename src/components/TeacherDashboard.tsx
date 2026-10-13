@@ -143,7 +143,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const [activePanel, setActivePanel] = useState<DashboardPanel>(() => resolvePanel(initialPanel));
 
-  // Trạng thái Subtab cho từng Panel (bổ sung tab json_import)
+  // Trạng thái Subtab cho từng Panel
   const [panel2Tab, setPanel2Tab] = useState<'word_import' | 'visual_editor' | 'ai_scan' | 'json_import'>('word_import');
   const [panel3Tab, setPanel3Tab] = useState<'shuffling' | 'anticheat' | 'settings'>('shuffling');
   const [panel4Tab, setPanel4Tab] = useState<'submissions' | 'distribution' | 'export_report'>('submissions');
@@ -554,7 +554,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   };
 
   // =========================================================================
-  // TAB 2.4: BỘ CHUYỂN ĐỔI VÀ NẠP TỆP JSON (HỖ TRỢ BASE64 VÀ CHUẨN GDPT 2018)
+  // TAB 2.4: BỘ CHUYỂN ĐỔI VÀ NẠP TỆP JSON (HỖ TRỢ BASE64 & BẢO TOÀN HÌNH VẼ 100%)
   // =========================================================================
   const parseJsonExamFile = (jsonData: any): Exam => {
     const rawQuestions = Array.isArray(jsonData.questions) ? jsonData.questions : [];
@@ -568,18 +568,35 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         partName = 'Phần III';
       }
 
-      // 2. Xử lý hình ảnh nhúng Base64 chuẩn mẫu
+      // 2. Xử lý và bảo toàn hình ảnh nhúng Base64 chuẩn mẫu (lưu cả diagram và image)
       let diagramObj = undefined;
-      if (q.image && q.image.data) {
-        const mime = q.image.mime_type || 'image/png';
-        const base64Data = String(q.image.data).startsWith('data:') 
-          ? q.image.data 
-          : `data:${mime};base64,${q.image.data}`;
-        diagramObj = {
-          type: 'image',
-          imageUrl: base64Data,
-          caption: q.image.caption || ''
-        } as any;
+      let imageObj = undefined;
+
+      // Ưu tiên đọc q.image hoặc q.diagram
+      const imgSource = q.image || q.diagram;
+      if (imgSource) {
+        if (typeof imgSource === 'string') {
+          const finalStr = imgSource.startsWith('data:') ? imgSource : `data:image/png;base64,${imgSource}`;
+          diagramObj = { type: 'image', imageUrl: finalStr, data: finalStr, caption: '' } as any;
+          imageObj = { data: finalStr, caption: '' };
+        } else if (imgSource.data || imgSource.imageUrl || imgSource.url) {
+          const rawData = imgSource.data || imgSource.imageUrl || imgSource.url;
+          const mime = imgSource.mime_type || 'image/png';
+          const finalData = String(rawData).startsWith('data:') 
+            ? rawData 
+            : `data:${mime};base64,${rawData}`;
+          diagramObj = {
+            type: 'image',
+            imageUrl: finalData,
+            data: finalData,
+            caption: imgSource.caption || ''
+          } as any;
+          imageObj = {
+            ...imgSource,
+            data: finalData,
+            caption: imgSource.caption || ''
+          };
+        }
       }
 
       const qCode = q.number ? `C${String(q.number).padStart(2, '0')}` : `C${String(idx + 1).padStart(2, '0')}`;
@@ -613,6 +630,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           options: opts,
           correctAnswer: correctAns,
           diagram: diagramObj,
+          image: imageObj,
           explanation: q.explanation || '',
           points: q.points || 0.25
         } as any;
@@ -643,6 +661,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           topic: qTopic,
           items: items,
           diagram: diagramObj,
+          image: imageObj,
           explanation: q.explanation || '',
           points: q.points || 1.0
         } as any;
@@ -660,6 +679,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         topic: qTopic,
         correctValue: String(q.answer || q.correct_value || q.correctAnswer || '').trim(),
         diagram: diagramObj,
+        image: imageObj,
         explanation: q.explanation || '',
         points: q.points || 0.25
       } as any;
@@ -1340,7 +1360,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                           <div className="flex items-center gap-2 mb-1">
                             <span className="font-bold text-indigo-700">{q.title || `Câu ${qIdx + 1}`}</span>
                             <span className="px-1.5 py-0.5 rounded text-3xs bg-slate-100 text-slate-600 font-semibold">{q.part}</span>
-                            {q.diagram && (
+                            {(q.diagram || q.image) && (
                               <span className="px-1.5 py-0.5 rounded text-3xs bg-amber-100 text-amber-800 font-bold">Có ảnh</span>
                             )}
                           </div>
