@@ -9,7 +9,7 @@ import {
   Home, LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
   Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, 
   UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, CheckCircle2,
-  Lock, KeyRound, AlertCircle
+  Lock, KeyRound, AlertCircle, Megaphone, Flame, Radio
 } from 'lucide-react';
 
 const DEFAULT_EXAM: Exam = {
@@ -74,15 +74,14 @@ const PRESET_BANNERS = [
 const DEFAULT_BRANDING = {
   schoolName: 'TRƯỜNG THPT HÙNG VƯƠNG',
   subtitle: 'HỆ THỐNG KHẢO THÍ VẬT LÍ TRỰC TUYẾN • CHƯƠNG TRÌNH GDPT 2018',
+  tickerText: '⚡ CHÀO MỪNG QUÝ THẦY CÔ VÀ CÁC EM HỌC SINH! • "Học để hiểu bản chất của tự nhiên — Thi để khẳng định tư duy khoa học" • Hệ thống khảo thí Vật lí trực tuyến chuẩn cấu trúc GDPT 2018 • Đề thi phân hóa rõ 3 phần: Trắc nghiệm 4 lựa chọn, Đúng/Sai đa ý và Trả lời ngắn!',
   logoUrl: '',
   bannerUrl: PRESET_BANNERS[0].url
 };
 
-// Mã PIN mặc định cho Giáo viên nếu chưa đổi
 const DEFAULT_TEACHER_PIN = '123456';
 
 export default function App() {
-  // 1. Phân quyền URL tự động: Nếu vào qua link/QR có mode=student hoặc exam/code thì lập tức vào màn hình học sinh
   const [appMode, setAppMode] = useState<'home' | 'student' | 'teacher' | 'print'>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
@@ -95,7 +94,6 @@ export default function App() {
 
   const [activePrintMode, setActivePrintMode] = useState<'exam_only' | 'exam_with_solutions' | 'matrix'>('exam_only');
 
-  // Trạng thái xác thực mã PIN Giáo viên
   const [isTeacherAuthenticated, setIsTeacherAuthenticated] = useState<boolean>(() => {
     try {
       return sessionStorage.getItem('physixam_teacher_auth') === 'true';
@@ -110,7 +108,7 @@ export default function App() {
   const [branding, setBranding] = useState(() => {
     try {
       const saved = localStorage.getItem('physixam_branding');
-      return saved ? JSON.parse(saved) : DEFAULT_BRANDING;
+      return saved ? { ...DEFAULT_BRANDING, ...JSON.parse(saved) } : DEFAULT_BRANDING;
     } catch (e) {
       return DEFAULT_BRANDING;
     }
@@ -197,7 +195,6 @@ export default function App() {
     maxViolations: 5
   } as any);
 
-  // Đọc tham số URL khi tải trang để định tuyến an toàn
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -254,7 +251,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [studentExamPhase, appMode]);
 
-  // HÀM BẢO MẬT: BẤM VÀO GIÁO VIÊN -> BẮT BUỘC NHẬP MÃ PIN NẾU CHƯA XÁC THỰC
   const handleRequestTeacherMode = () => {
     if (isTeacherAuthenticated) {
       setAppMode('teacher');
@@ -566,6 +562,22 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans antialiased selection:bg-indigo-500 selection:text-white">
       
+      {/* CSS NHÚNG NỘI TUYẾN DÀNH CHO DÒNG CHỮ CHUYỂN ĐỘNG VÀ ĐỨNG YÊN KHI HOVER */}
+      <style>{`
+        @keyframes marqueeScroll {
+          0% { transform: translateX(0%); }
+          100% { transform: translateX(-50%); }
+        }
+        .marquee-track {
+          display: inline-flex;
+          white-space: nowrap;
+          animation: marqueeScroll 28s linear infinite;
+        }
+        .marquee-track:hover {
+          animation-play-state: paused;
+        }
+      `}</style>
+
       {/* 1. THANH ĐIỀU HƯỚNG NỔI (FLOATING NAVBAR) */}
       <header className="sticky top-0 z-40 px-3 sm:px-6 py-2.5 print:hidden">
         <div className="max-w-7xl mx-auto backdrop-blur-xl bg-slate-900/90 border border-slate-800/80 rounded-2xl shadow-xl shadow-slate-950/20 px-4 py-2 flex items-center justify-between gap-4">
@@ -580,10 +592,10 @@ export default function App() {
               <img 
                 src={branding.logoUrl} 
                 alt="Logo" 
-                className="w-8 h-8 rounded-xl object-contain bg-white/10 p-1 border border-white/20 group-hover:scale-105 transition shadow-sm shrink-0" 
+                className="w-9 h-9 rounded-xl object-contain bg-white/10 p-1 border border-white/20 group-hover:scale-105 transition shadow-sm shrink-0" 
               />
             ) : (
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
                 <Atom className="w-4 h-4" />
               </div>
             )}
@@ -626,7 +638,6 @@ export default function App() {
                 <span>Trang chủ</span>
               </button>
 
-              {/* Nút Giáo viên - Đã kích hoạt bảo mật Mã PIN */}
               <button
                 type="button"
                 onClick={handleRequestTeacherMode}
@@ -662,8 +673,43 @@ export default function App() {
       {/* CHẾ ĐỘ 1: CỔNG THÔNG TIN TRANG CHỦ                                        */}
       {/* ========================================================================= */}
       {appMode === 'home' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 space-y-6 animate-in fade-in duration-300">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 space-y-4 animate-in fade-in duration-300">
           
+          {/* ===================================================================== */}
+          {/* ⚡ HIỆU ỨNG NỔI BẬT: DẢI CHỮ CHUYỂN ĐỘNG (TICKER MARQUEE BANNER)        */}
+          {/* ===================================================================== */}
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 border border-indigo-800/40 shadow-md backdrop-blur-md py-2.5 px-4 flex items-center gap-3 text-white group">
+            
+            {/* Nhãn Huy hiệu Thông Báo cố định bên trái */}
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-600 text-white font-black text-3xs uppercase tracking-wider shrink-0 shadow-sm border border-indigo-400/30">
+              <Megaphone className="w-3.5 h-3.5 text-amber-300 animate-bounce" />
+              <span className="hidden sm:inline">Thông Điệp Khảo Thí</span>
+              <span className="sm:hidden">Tin Mới</span>
+            </div>
+
+            {/* Khung chuyển động vô tận (Marquee) */}
+            <div className="flex-1 overflow-hidden relative select-none">
+              <div className="marquee-track flex items-center gap-8 font-medium text-xs text-indigo-100 cursor-default">
+                <span>{branding.tickerText || DEFAULT_BRANDING.tickerText}</span>
+                <span className="text-amber-300">✦</span>
+                <span>{branding.tickerText || DEFAULT_BRANDING.tickerText}</span>
+              </div>
+            </div>
+
+            {/* Nút bấm chỉnh sửa nhanh dòng chữ */}
+            <button
+              type="button"
+              onClick={() => {
+                setBrandingDraft(branding);
+                setIsBrandingModalOpen(true);
+              }}
+              className="text-3xs text-indigo-300 hover:text-white underline font-semibold shrink-0 cursor-pointer hidden md:inline transition"
+              title="Nhấn để chỉnh sửa dòng chữ này"
+            >
+              Chỉnh sửa
+            </button>
+          </div>
+
           {/* PANO BANNER HERO CARD THU GỌN 2/3 */}
           <section className="relative rounded-3xl overflow-hidden shadow-xl border border-indigo-900/40 bg-slate-950 min-h-[250px] sm:min-h-[290px] flex items-center">
             
@@ -863,7 +909,7 @@ export default function App() {
           </div>
         )}
 
-        {/* CHẾ ĐỘ 3: BẢNG ĐIỀU KHIỂN GIÁO VIÊN (ĐÃ QUA XÁC THỰC MÃ PIN) */}
+        {/* CHẾ ĐỘ 3: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
         {appMode === 'teacher' && (
           <TeacherDashboard
             exam={safeCurrentExam}
@@ -1066,7 +1112,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL CÀI ĐẶT PANO BANNER & LOGO */}
+      {/* MODAL CÀI ĐẶT PANO BANNER, LOGO & DÒNG CHỮ CHUYỂN ĐỘNG */}
       {isBrandingModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 print:hidden animate-in fade-in duration-200">
           <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl border border-slate-200 space-y-6 max-h-[90vh] overflow-y-auto">
@@ -1077,8 +1123,8 @@ export default function App() {
                   <ImageIcon className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-black text-slate-900 text-lg">Tùy Biến Logo & Pano Banner</h3>
-                  <p className="text-xs text-slate-500">Cá nhân hóa thương hiệu trường hoặc bộ môn của Thầy</p>
+                  <h3 className="font-black text-slate-900 text-lg">Tùy Biến Giao Diện Trang Chủ</h3>
+                  <p className="text-xs text-slate-500">Cá nhân hóa Logo, Pano Banner và Dòng chữ thông điệp chuyển động</p>
                 </div>
               </div>
               <button 
@@ -1091,6 +1137,26 @@ export default function App() {
 
             <div className="space-y-5 text-xs">
               
+              {/* Dòng chữ chuyển động */}
+              <div className="p-4 rounded-2xl bg-indigo-50/50 border border-indigo-100 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Megaphone className="w-4 h-4 text-indigo-600" />
+                  <label className="font-black text-indigo-950 uppercase text-3xs tracking-wider">
+                    Dòng Chữ Chuyển Động (Thông báo / Truyền cảm hứng):
+                  </label>
+                </div>
+                <textarea
+                  rows={2}
+                  value={brandingDraft.tickerText || ''}
+                  onChange={(e) => setBrandingDraft({ ...brandingDraft, tickerText: e.target.value })}
+                  placeholder="Nhập thông báo ngày thi, dặn dò học sinh hoặc câu nói truyền cảm hứng..."
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-indigo-200 focus:border-indigo-600 outline-none font-medium text-xs bg-white text-slate-800 transition resize-none"
+                />
+                <p className="text-3xs text-slate-500 italic">
+                  * Dòng chữ này sẽ chuyển động liên tục tại khe giữa thanh tiêu đề và Banner trên trang chủ.
+                </p>
+              </div>
+
               <div>
                 <label className="block font-black text-slate-700 mb-1.5 uppercase text-3xs tracking-wider">
                   Tên Trường / Tổ Bộ Môn:
