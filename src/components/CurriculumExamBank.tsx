@@ -1,15 +1,15 @@
 import React, { useState, useMemo } from 'react';
-import { 
-  GraduationCap, Filter, Search, X, RotateCcw, 
-  Sparkles, Check, Eye, Plus, Send, Copy, 
+import {
+  GraduationCap, Filter, Search, X, RotateCcw,
+  Sparkles, Check, Eye, Plus, Send, Copy,
   Printer, Play, CheckCircle2, AlertCircle, BookOpen,
   FolderTree, Share2, Layers, Tag, ExternalLink, Calendar, Users,
   Edit3, Trash2, Download, BookmarkCheck
 } from 'lucide-react';
 import { Exam, AntiCheatConfig } from '../types/exam';
-import { 
-  CurriculumChapter, CurriculumLesson, ExamPackage, 
-  GradeLevel, ExamCategory, ExamAssignmentInfo 
+import {
+  CurriculumChapter, CurriculumLesson, ExamPackage,
+  GradeLevel, ExamCategory, ExamAssignmentInfo
 } from '../types/curriculum';
 import { CURRICULUM_CHAPTERS } from '../data/curriculumData';
 import { AssignExamModal } from './AssignExamModal';
@@ -152,24 +152,22 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
 
   return (
     <div className="space-y-5">
-      
+
       {/* THANH TAB PHỤ: NGÂN HÀNG ĐỀ THI vs BÀI THI ĐÃ GIAO */}
       <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={() => setActiveTab('bank')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer flex items-center gap-2 ${
-              activeTab === 'bank'
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer flex items-center gap-2 ${activeTab === 'bank'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'text-slate-700 hover:bg-slate-100'
-            }`}
+              }`}
           >
             <FolderTree className="w-4 h-4" />
             <span>Ngân hàng đề thi GDPT 2018</span>
-            <span className={`px-2 py-0.5 rounded-full text-2xs font-bold ${
-              activeTab === 'bank' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-800'
-            }`}>
+            <span className={`px-2 py-0.5 rounded-full text-2xs font-bold ${activeTab === 'bank' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-800'
+              }`}>
               {filteredPackages.length}/{packages.length} đề
             </span>
           </button>
@@ -177,17 +175,15 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('assigned')}
-            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer flex items-center gap-2 ${
-              activeTab === 'assigned'
+            className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer flex items-center gap-2 ${activeTab === 'assigned'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'text-slate-700 hover:bg-slate-100'
-            }`}
+              }`}
           >
             <Send className="w-4 h-4" />
             <span>Bài thi đã giao cho học sinh</span>
-            <span className={`px-2 py-0.5 rounded-full text-2xs font-bold ${
-              activeTab === 'assigned' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-800'
-            }`}>
+            <span className={`px-2 py-0.5 rounded-full text-2xs font-bold ${activeTab === 'assigned' ? 'bg-indigo-700 text-white' : 'bg-slate-200 text-slate-800'
+              }`}>
               {assignments.length} bài
             </span>
           </button>
@@ -232,10 +228,10 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
       {/* ========================================================================= */}
       {activeTab === 'bank' && (
         <div className="space-y-5">
-          
+
           {/* THANH CÔNG CỤ BỘ LỌC ĐA TẦNG (MULTI-LEVEL FILTER TOOLBAR) */}
           <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-xs space-y-4">
-            
+
             {/* TẦNG 1: LỌC KHỐI LỚP */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
@@ -253,11 +249,10 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
                     setFilterChapterId('all');
                     setFilterLessonId('all');
                   }}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
-                    filterGrade === 'all'
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${filterGrade === 'all'
                       ? 'bg-slate-900 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
+                    }`}
                 >
                   <span>Tất cả</span>
                   <span className="opacity-75">({stats.total})</span>
@@ -270,11 +265,10 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
                     setFilterChapterId('all');
                     setFilterLessonId('all');
                   }}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
-                    filterGrade === 10
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${filterGrade === 10
                       ? 'bg-teal-600 text-white shadow-xs'
                       : 'bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200'
-                  }`}
+                    }`}
                 >
                   <span>Khối 10</span>
                   <span className="opacity-80">({stats.g10})</span>
@@ -287,11 +281,10 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
                     setFilterChapterId('all');
                     setFilterLessonId('all');
                   }}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
-                    filterGrade === 11
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${filterGrade === 11
                       ? 'bg-sky-600 text-white shadow-xs'
                       : 'bg-sky-50 text-sky-800 hover:bg-sky-100 border border-sky-200'
-                  }`}
+                    }`}
                 >
                   <span>Khối 11</span>
                   <span className="opacity-80">({stats.g11})</span>
@@ -304,11 +297,10 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
                     setFilterChapterId('all');
                     setFilterLessonId('all');
                   }}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${
-                    filterGrade === 12
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 ${filterGrade === 12
                       ? 'bg-indigo-600 text-white shadow-xs'
                       : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100 border border-indigo-200'
-                  }`}
+                    }`}
                 >
                   <span>Khối 12 (Trọng tâm)</span>
                   <span className="opacity-80">({stats.g12})</span>
@@ -337,11 +329,10 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
                   key={cat.id}
                   type="button"
                   onClick={() => setFilterCategory(cat.id as any)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                    filterCategory === cat.id
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${filterCategory === cat.id
                       ? 'bg-indigo-600 text-white shadow-2xs font-bold'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                  }`}
+                    }`}
                 >
                   {cat.label}
                 </button>
@@ -350,7 +341,7 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
 
             {/* TẦNG 3 & 4: DROPDOWNS ĐỘNG THEO CHƯƠNG & BÀI HỌC + TÌM KIẾM */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3 pt-2">
-              
+
               {/* Dropdown Chương / Chủ đề */}
               <div className="md:col-span-4 space-y-1">
                 <label className="text-2xs font-bold text-slate-500 uppercase tracking-wider block">
@@ -367,7 +358,7 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
                   <option value="all">Tất cả các chương</option>
                   {availableChapters.map((chap) => (
                     <option key={chap.id} value={chap.id}>
-                      Lớp {chap.grade} • {chap.chapterNumber}: {chap.title}
+                      Lớp {chap.grade} • {(chap as any).chapterNumber ? `${(chap as any).chapterNumber}: ` : ''}{chap.title}
                     </option>
                   ))}
                 </select>
@@ -488,12 +479,18 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
           ) : (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
               {filteredPackages.map((pkg) => {
-                const isCurrentlyActive = currentExam.id === pkg.examData.id || currentExam.title === pkg.examData.title;
-                const gradeColor = pkg.grade === 12 
-                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200' 
-                  : pkg.grade === 11 
-                  ? 'bg-sky-50 text-sky-700 border-sky-200' 
-                  : 'bg-teal-50 text-teal-700 border-teal-200';
+                const isCurrentlyActive = Boolean(
+                  currentExam && pkg && (
+                    (currentExam.code && pkg.code && currentExam.code === pkg.code) ||
+                    (currentExam.id && pkg.examData?.id && currentExam.id === pkg.examData.id) ||
+                    (currentExam.code && pkg.examData?.code && currentExam.code === pkg.examData.code)
+                  )
+                );
+                const gradeColor = pkg.grade === 12
+                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                  : pkg.grade === 11
+                    ? 'bg-sky-50 text-sky-700 border-sky-200'
+                    : 'bg-teal-50 text-teal-700 border-teal-200';
 
                 const assignedInfo = assignments.find((a) => a.examId === pkg.id || a.examTitle === pkg.title);
 
@@ -504,15 +501,14 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
                 return (
                   <div
                     key={pkg.id}
-                    className={`bg-white rounded-3xl border transition-all duration-200 flex flex-col justify-between overflow-hidden shadow-xs hover:shadow-md ${
-                      isCurrentlyActive
+                    className={`bg-white rounded-3xl border transition-all duration-200 flex flex-col justify-between overflow-hidden shadow-xs hover:shadow-md ${isCurrentlyActive
                         ? 'border-indigo-500 ring-2 ring-indigo-500/20'
                         : 'border-slate-200 hover:border-slate-300'
-                    }`}
+                      }`}
                   >
                     {/* Header Thẻ Đề Thi */}
                     <div className="p-5 pb-4 space-y-3">
-                      
+
                       {/* Badges Phân loại */}
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -622,11 +618,10 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
                             onSelectPackage(pkg);
                             showToast(`Đã nạp đề thi [Mã: ${pkg.code}] "${pkg.title}" làm đề kiểm tra hiện tại!`);
                           }}
-                          className={`px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center gap-1.5 cursor-pointer ${
-                            isCurrentlyActive
+                          className={`px-3 py-1.5 rounded-xl font-bold text-xs transition flex items-center gap-1.5 cursor-pointer ${isCurrentlyActive
                               ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                               : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs'
-                          }`}
+                            }`}
                           title="Nạp đề này vào phiên làm bài thi hiện tại và thiết lập lại đồng hồ đếm ngược"
                         >
                           <BookOpen className="w-3.5 h-3.5" />
@@ -839,21 +834,19 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
 
         </div>
       )}
-
       {/* HỘP THOẠI GIAO ĐỀ THI CHO HỌC SINH */}
       {assigningPackage && (
         <AssignExamModal
           isOpen={true}
           onClose={() => setAssigningPackage(null)}
           examPackage={assigningPackage}
-          onConfirmAssignment={(assignment, switchToStudent) => {
-            onAssignExam(assigningPackage, assignment, switchToStudent);
+          currentExam={currentExam}
+          onAssign={(pkg, assignment, switchToStudent) => {
+            onAssignExam(pkg, assignment, switchToStudent);
             setAssigningPackage(null);
           }}
-          currentAntiCheatConfig={antiCheatConfig}
         />
       )}
-
       {/* HỘP THOẠI TẢI LÊN ĐỀ THI THEO BÀI */}
       {uploadAnchor && (
         <UploadLessonExamModal
