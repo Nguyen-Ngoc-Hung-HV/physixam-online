@@ -548,13 +548,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   };
 
   // =========================================================================
-  // TAB 2.4: BỘ PHÂN GIẢI JSON THÔNG MINH (TỰ ĐỘNG BÓC TÁCH CẢ CẤU TRÚC PHẲNG & LỒNG NHAU)
+  // TAB 2.4: BỘ PHÂN GIẢI JSON THÔNG MINH
   // =========================================================================
   const parseJsonExamFile = (jsonData: any): Exam => {
-    // 1. Tự động bóc tách đối tượng cha nếu file có cấu trúc { exam: { ... } } hoặc { data: { ... } }
     const root = jsonData?.exam || jsonData?.data || jsonData || {};
 
-    // 2. Tìm kiếm mảng câu hỏi ở mọi cấp độ khả dĩ
     const rawQuestions: any[] = Array.isArray(root.questions) 
       ? root.questions 
       : Array.isArray(jsonData.questions) 
@@ -562,7 +560,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         : [];
 
     const convertedQuestions: Question[] = rawQuestions.map((q: any, idx: number) => {
-      // Xác định phần thi theo chuẩn GDPT 2018
       let partName = 'Phần I';
       const rawPart = String(q.part || '').trim().toUpperCase();
       const rawType = String(q.type || '').trim().toLowerCase();
@@ -573,7 +570,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         partName = 'Phần III';
       }
 
-      // Bảo toàn và chuẩn hóa hình ảnh Base64
       let diagramObj = undefined;
       let imageObj = undefined;
 
@@ -608,7 +604,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       const qStem = q.question || q.prompt || q.stem || '';
       const qTopic = q.metadata?.topic || q.topic || '';
 
-      // A. Phần I: Trắc nghiệm 4 lựa chọn
       if (partName === 'Phần I') {
         const opts = Array.isArray(q.options) ? q.options.map((opt: any) => ({
           id: opt.id || opt.label || 'A',
@@ -640,7 +635,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         } as any;
       }
 
-      // B. Phần II: Trắc nghiệm Đúng / Sai theo chùm ý
       if (partName === 'Phần II') {
         const rawStatements = Array.isArray(q.statements) 
           ? q.statements 
@@ -650,7 +644,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
         const items = rawStatements.map((st: any, sIdx: number) => {
           let boolCorrect = false;
-          // Nhận diện cả 'correct: true', 'answer: "D"', 'isCorrect: true'
           if (st.correct !== undefined) {
             boolCorrect = Boolean(st.correct);
           } else if (st.isCorrect !== undefined) {
@@ -684,7 +677,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         } as any;
       }
 
-      // C. Phần III: Trả lời ngắn / điền số
       return {
         id: q.id || `q-${idx + 1}`,
         code: qCode,
@@ -703,7 +695,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     });
 
     const finalTitle = root.title || jsonData.title || 'Đề khảo thí Vật lí (Nhập từ JSON)';
-    const finalGrade = root.grade || jsonData.grade || 10;
+    const finalGrade = root.grade || jsonData.grade || 12;
     const finalCode = root.code || jsonData.code || `L${finalGrade}-${Date.now().toString().slice(-4)}`;
     const finalDuration = Number(root.duration || root.durationMinutes || jsonData.duration || jsonData.durationMinutes || 45);
 
@@ -735,7 +727,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         const text = e.target?.result as string;
         const parsedData = JSON.parse(text);
 
-        // Kiểm tra linh động mảng questions ở cả tầng ngoài cùng lẫn tầng con (exam, data)
         const hasQuestions = (parsedData && Array.isArray(parsedData.questions)) ||
           (parsedData?.exam && Array.isArray(parsedData.exam.questions)) ||
           (parsedData?.data && Array.isArray(parsedData.data.questions));
@@ -1059,34 +1050,34 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     <span>💾 Lưu đề này vào Ngân hàng</span>
                   </button>
 
+                  {/* NÚT GIAO ĐỀ: ĐỒNG BỘ 100% VỚI safeExam ĐANG CHỌN */}
                   <button
                     type="button"
                     onClick={() => {
-                      const matched = allPackages.find((p) => p.code === activeCode || p.title === safeExam.title);
-                      if (matched) {
-                        setAssigningPackage(matched);
-                      } else {
-                        const tempPkg: ExamPackage = {
-                          id: safeExam.id || 'temp-exam',
-                          grade: 12,
-                          category: 'survey',
-                          categoryLabel: 'Chuẩn Bộ GD&ĐT',
-                          chapterId: '12-c1',
-                          chapterTitle: 'Chương 1: Vật lí nhiệt & Sóng - Điện',
-                          code: activeCode,
-                          title: safeExam.title,
-                          subtitle: safeExam.subtitle,
-                          durationMinutes: safeExam.durationMinutes || 45,
-                          totalPoints: safeExam.totalPoints || 10,
-                          difficulty: 'Chuẩn Bộ GD&ĐT',
-                          tags: ['Bộ GD&ĐT', 'KaTeX', 'SVG'],
-                          svgCount: safeQuestions.filter((q) => q?.diagram?.type === 'svg').length,
-                          katexCount: safeQuestions.filter((q) => (q?.stem || '').includes('$')).length,
-                          examData: safeExam,
-                          createdAt: new Date().toISOString().slice(0, 10),
-                        };
-                        setAssigningPackage(tempPkg);
-                      }
+                      const targetGrade = safeExam.gradeLevel 
+                        ? (parseInt(String(safeExam.gradeLevel).replace(/\D/g, ''), 10) || 12) 
+                        : 12;
+
+                      const freshPkg: ExamPackage = {
+                        id: safeExam.id || `pkg-${activeCode || 'L12B1.3'}`,
+                        grade: targetGrade as any,
+                        category: 'survey',
+                        categoryLabel: 'Chuẩn Bộ GD&ĐT',
+                        chapterId: 'c1',
+                        chapterTitle: safeExam.subtitle || 'Khảo thí Vật lí',
+                        code: safeExam.code || activeCode || 'L12B1.3',
+                        title: safeExam.title,
+                        subtitle: safeExam.subtitle,
+                        durationMinutes: safeExam.durationMinutes || 45,
+                        totalPoints: safeExam.totalPoints || 10,
+                        difficulty: 'Chuẩn Bộ GD&ĐT',
+                        tags: ['Bộ GD&ĐT', 'KaTeX'],
+                        svgCount: 0,
+                        katexCount: 0,
+                        examData: safeExam,
+                        createdAt: new Date().toISOString().slice(0, 10),
+                      };
+                      setAssigningPackage(freshPkg);
                     }}
                     className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-md shadow-emerald-600/25 transition flex items-center gap-1.5 cursor-pointer"
                   >
@@ -1889,12 +1880,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         />
       )}
 
-      {/* MODAL GIAO ĐỀ THI */}
+      {/* MODAL GIAO ĐỀ THI: ĐẢM BẢO TRUYỀN currentExam={safeExam} ĐỂ KHÔNG BỊ TRÙNG ĐỀ CŨ */}
       {assigningPackage && (
         <AssignExamModal
           isOpen={true}
           onClose={() => setAssigningPackage(null)}
           examPackage={assigningPackage}
+          currentExam={safeExam}
           onAssign={handleConfirmAssignment}
         />
       )}

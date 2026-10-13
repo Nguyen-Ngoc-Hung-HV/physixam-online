@@ -197,7 +197,10 @@ export default function App() {
     maxViolations: 5
   } as any);
 
-  // NẠP ĐỀ TỰ ĐỘNG TỪ MONGODB ATLAS KHI QUÉT QR HOẶC TRUY CẬP LINK
+  // =========================================================================
+  // TỆP 2: NẠP ĐỀ TỰ ĐỘNG TỪ MONGODB ATLAS KHI MỞ LINK / QUÉT QR (ĐÃ CẬP NHẬT)
+  // Ưu tiên tải trực tiếp bản ghi mới nhất từ máy chủ, vượt qua cache cũ cục bộ
+  // =========================================================================
   useEffect(() => {
     const fetchExamFromMongo = async () => {
       try {
@@ -211,6 +214,31 @@ export default function App() {
 
         setIsLoadingAssignedExam(true);
 
+        // 1. Ưu tiên tải trực tiếp bản ghi mới nhất từ máy chủ MongoDB Atlas qua API
+        try {
+          const response = await fetch(`/api/assignments?code=${encodeURIComponent(targetCode)}`);
+          if (response.ok) {
+            const doc = await response.json();
+            const cloudExam = doc?.examData || doc?.exam || (doc.questions ? doc : null);
+            if (cloudExam && Array.isArray(cloudExam.questions) && cloudExam.questions.length > 0) {
+              setExam(cloudExam);
+              setActiveCode(doc.code || doc.accessCode || cloudExam.code || targetCode);
+              setTimeRemainingSeconds((cloudExam.durationMinutes || 45) * 60);
+              
+              if (safeStorage?.setItem) {
+                safeStorage.setItem('physixam_current_exam', JSON.stringify(cloudExam));
+              } else {
+                localStorage.setItem('physixam_current_exam', JSON.stringify(cloudExam));
+              }
+              setIsLoadingAssignedExam(false);
+              return;
+            }
+          }
+        } catch (netErr) {
+          console.warn('Lỗi fetch server, chuyển sang đọc bộ nhớ cục bộ:', netErr);
+        }
+
+        // 2. Dự phòng: Nếu mất mạng thì mới kiểm tra trong assignments cục bộ
         const localMatched: any = assignments.find((a: any) => 
           String(a.id || '').toUpperCase() === targetCode.toUpperCase() ||
           String(a.code || a.accessCode || a.examCode || '').toUpperCase() === targetCode.toUpperCase()
@@ -220,29 +248,9 @@ export default function App() {
           setExam(localMatched.examData);
           setActiveCode(localMatched.code || localMatched.accessCode || localMatched.examCode || targetCode);
           setTimeRemainingSeconds((localMatched.examData.durationMinutes || 45) * 60);
-          setIsLoadingAssignedExam(false);
-          return;
-        }
-
-        const response = await fetch(`/api/assignments?code=${encodeURIComponent(targetCode)}`);
-        if (response.ok) {
-          const doc = await response.json();
-          const cloudExam = doc?.examData || doc?.exam || (doc.questions ? doc : null);
-          if (cloudExam && Array.isArray(cloudExam.questions) && cloudExam.questions.length > 0) {
-            setExam(cloudExam);
-            setActiveCode(doc.code || doc.accessCode || cloudExam.code || targetCode);
-            setTimeRemainingSeconds((cloudExam.durationMinutes || 45) * 60);
-            if (safeStorage?.setItem) {
-              safeStorage.setItem('physixam_current_exam', JSON.stringify(cloudExam));
-            } else {
-              localStorage.setItem('physixam_current_exam', JSON.stringify(cloudExam));
-            }
-            setIsLoadingAssignedExam(false);
-            return;
-          }
         }
       } catch (err) {
-        console.warn('Lỗi kết nối tải đề thi từ MongoDB Atlas:', err);
+        console.warn('Lỗi kết nối tải đề thi:', err);
       } finally {
         setIsLoadingAssignedExam(false);
       }
@@ -459,8 +467,8 @@ export default function App() {
   };
 
   const handleAssignExam = async (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
-    const targetExam = pkg?.examData || (pkg as any)?.questions ? (pkg as any) : exam || safeCurrentExam;
-    const finalCode = (assignment as any)?.code || assignment.accessCode || targetExam.code || 'L10GHKI';
+    const targetExam = pkg?.examData || (pkg as any)?.questions ? (pkg as any) : (exam || DEFAULT_EXAM);
+    const finalCode = (assignment as any)?.code || assignment.accessCode || targetExam.code || 'L12B1.3';
 
     const fullAssignment: any = {
       ...assignment,
@@ -663,9 +671,7 @@ export default function App() {
     setTimeout(() => { window.print(); }, 300);
   };
 
-  // =========================================================================
-  // XỬ LÝ BẮT BUỘC NHẬP HỌ TÊN, LỚP, SBD VÀ KÍCH HOẠT TOÀN MÀN HÌNH
-  // =========================================================================
+  // XÁC NHẬN BẮT ĐẦU THI & BẬT TOÀN MÀN HÌNH
   const handleStartExamWithRegistration = (e: React.FormEvent) => {
     e.preventDefault();
     if (!candidateInfo.name.trim() || !candidateInfo.studentClass.trim() || !candidateInfo.candidateNumber.trim()) {
@@ -673,7 +679,6 @@ export default function App() {
       return;
     }
 
-    // Tự động kích hoạt toàn màn hình để tối ưu hóa diện tích & giám sát
     try {
       if (document.documentElement.requestFullscreen) {
         document.documentElement.requestFullscreen().catch(() => {});
@@ -923,7 +928,7 @@ export default function App() {
                         required
                         value={candidateInfo.studentClass}
                         onChange={(e) => setCandidateInfo({ ...candidateInfo, studentClass: e.target.value })}
-                        placeholder="Ví dụ: 10A1"
+                        placeholder="Ví dụ: 12A1"
                         className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition"
                       />
                     </div>
@@ -937,7 +942,7 @@ export default function App() {
                         required
                         value={candidateInfo.candidateNumber}
                         onChange={(e) => setCandidateInfo({ ...candidateInfo, candidateNumber: e.target.value })}
-                        placeholder="Ví dụ: 1001"
+                        placeholder="Ví dụ: 1201"
                         className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition font-mono"
                       />
                     </div>
