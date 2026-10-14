@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Component, ErrorInfo, ReactNode } from 'react';
 import { Exam, StudentAnswers, AntiCheatConfig, ViolationEvent, StudentSubmission, ExamVariantBundle } from './types/exam';
 import { StudentExamLaunch } from './components/StudentExamLaunch';
 import { ExamResults, PrintMode } from './components/ExamResults';
@@ -11,6 +11,103 @@ import {
   UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, CheckCircle2,
   Lock, KeyRound, AlertCircle, Megaphone, Loader2, UserCheck, Maximize2
 } from 'lucide-react';
+
+// =========================================================================
+// LỚP BẢO VỆ CHỐNG TRẮNG TRANG CHO SAFARI (REACT ERROR BOUNDARY)
+// =========================================================================
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  evaluation: any;
+  candidateInfo: any;
+  exam: any;
+  onRetake: () => void;
+  onOpenTeacherMode: () => void;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: any;
+}
+
+class ResultsErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: ErrorInfo) {
+    console.warn('Bảo vệ Safari: Bắt lỗi render ExamResults an toàn:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const { evaluation, candidateInfo, exam, onRetake, onOpenTeacherMode } = this.props;
+      const displayScore = Number(evaluation?.totalScore || evaluation?.score || 0).toFixed(2);
+      const correct = evaluation?.correctCount || 0;
+      const total = evaluation?.totalQuestions || exam?.questions?.length || 0;
+
+      return (
+        <div className="max-w-2xl mx-auto my-8 p-6 sm:p-8 bg-white rounded-3xl shadow-xl border border-slate-200 text-center space-y-6 animate-in fade-in">
+          <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+            <CheckCircle2 className="w-10 h-10" />
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-2xl font-black text-slate-900">Nộp Bài Thi Thành Công!</h2>
+            <p className="text-xs text-slate-500 font-medium">{exam?.title}</p>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-indigo-50/60 border border-indigo-100 text-left space-y-2 text-xs">
+            <div className="flex justify-between">
+              <span className="text-slate-600">Thí sinh:</span>
+              <strong className="text-slate-900">{candidateInfo?.name || 'Thí sinh'}</strong>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-600">Lớp:</span>
+              <strong className="text-slate-900">{candidateInfo?.studentClass || '11'}</strong>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-600">Số báo danh:</span>
+              <strong className="font-mono text-slate-900">{candidateInfo?.candidateNumber || 'SBD-001'}</strong>
+            </div>
+          </div>
+
+          <div className="p-6 rounded-3xl bg-gradient-to-tr from-emerald-600 to-teal-700 text-white shadow-lg space-y-1">
+            <div className="text-3xs uppercase tracking-widest text-emerald-200 font-bold">Điểm số bài thi</div>
+            <div className="text-5xl font-black">
+              {displayScore}
+              <span className="text-xl font-normal text-emerald-200"> / 10đ</span>
+            </div>
+            <div className="text-xs text-emerald-100 font-medium pt-1">
+              Đúng {correct} / {total} câu
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 justify-center pt-2">
+            <button
+              type="button"
+              onClick={onRetake}
+              className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition"
+            >
+              Làm lại bài thi
+            </button>
+            <button
+              type="button"
+              onClick={onOpenTeacherMode}
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs cursor-pointer shadow-md transition"
+            >
+              Về Bảng điều khiển Giáo viên
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const DEFAULT_EXAM: Exam = {
   id: 'exam-101',
@@ -173,10 +270,9 @@ export default function App() {
   } as any);
 
   // =========================================================================
-  // ĐỒNG BỘ TOÀN DIỆN TỪ MONGODB ATLAS: SUBMISSIONS & ASSIGNMENTS
+  // ĐỒNG BỘ TOÀN DIỆN TỪ MONGODB ATLAS
   // =========================================================================
   const fetchAllDataFromMongo = async () => {
-    // 1. Tải toàn bộ danh sách bài nộp của học sinh (Bảng điểm Panel 4)
     try {
       const resSub = await fetch('/api/submissions');
       if (resSub.ok) {
@@ -192,7 +288,6 @@ export default function App() {
       }
     } catch (err) {}
 
-    // 2. Tải toàn bộ danh sách bài thi đã giao (Mục Bài thi đã giao trong Ngân hàng)
     try {
       const resAssign = await fetch('/api/assignments');
       if (resAssign.ok) {
@@ -205,7 +300,6 @@ export default function App() {
     } catch (err) {}
   };
 
-  // Tự động đồng bộ mỗi 8 giây khi giáo viên đang ở trang quản trị
   useEffect(() => {
     fetchAllDataFromMongo();
     const interval = setInterval(() => {
@@ -214,7 +308,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Tải đề tự động khi học sinh quét mã QR / mở link
   useEffect(() => {
     const fetchExamFromMongo = async () => {
       try {
@@ -497,10 +590,32 @@ export default function App() {
     }));
   };
 
-  const handleSubmitExam = async () => {
+  // =========================================================================
+  // XỬ LÝ NỘP BÀI: AN TOÀN TUYỆT ĐỐI CHO SAFARI & CHROME
+  // =========================================================================
+  const handleSubmitExam = () => {
+    // 1. Thoát toàn màn hình an toàn cho WebKit/Safari
+    try {
+      if (typeof document !== 'undefined') {
+        const isFs = document.fullscreenElement || (document as any).webkitFullscreenElement;
+        if (isFs) {
+          if (document.exitFullscreen) {
+            document.exitFullscreen().catch(() => {});
+          } else if ((document as any).webkitExitFullscreen) {
+            (document as any).webkitExitFullscreen();
+          }
+        }
+      }
+    } catch (e) {}
+
+    // 2. Chấm điểm chính xác
     let score = 0;
     const detailedFeedback: any[] = [];
     const questionsList = (exam && Array.isArray(exam.questions)) ? exam.questions : (DEFAULT_EXAM.questions || []);
+
+    let part1Score = 0, part1Correct = 0, part1Total = 0;
+    let part2Score = 0, part2Correct = 0, part2Total = 0;
+    let part3Score = 0, part3Correct = 0, part3Total = 0;
 
     questionsList.forEach((q: any) => {
       if (!q || !q.id) return;
@@ -508,6 +623,11 @@ export default function App() {
       let isCorrect = false;
       let pointsAwarded = 0;
       const qPoints = q.points || (10 / (questionsList.length || 1));
+      const qPart = q.part || 'Phần I';
+
+      if (qPart === 'Phần I') part1Total++;
+      else if (qPart === 'Phần II') part2Total++;
+      else part3Total++;
 
       if (q.type === 'multiple_choice') {
         if (String(userAns) === String(q.correctAnswer)) {
@@ -535,11 +655,37 @@ export default function App() {
       }
 
       score += pointsAwarded;
+      if (isCorrect) {
+        if (qPart === 'Phần I') { part1Correct++; part1Score += pointsAwarded; }
+        else if (qPart === 'Phần II') { part2Correct++; part2Score += pointsAwarded; }
+        else { part3Correct++; part3Score += pointsAwarded; }
+      }
+
       detailedFeedback.push({ questionId: q.id, isCorrect, pointsAwarded });
     });
 
     const finalScore = Number(Math.min(10, Math.max(0, score)).toFixed(2));
-    const evalResult = { totalScore: finalScore, detailedFeedback };
+    const correctCount = detailedFeedback.filter(f => f.isCorrect).length;
+    const totalCount = questionsList.length;
+    const percentage = Math.round((finalScore / 10) * 100);
+
+    // Bổ sung đầy đủ tất cả các trường để Safari không bị lỗi undefined property
+    const evalResult = {
+      totalScore: finalScore,
+      score: finalScore,
+      maxScore: 10,
+      percentage: percentage,
+      correctCount: correctCount,
+      totalQuestions: totalCount,
+      detailedFeedback,
+      feedback: detailedFeedback,
+      partScores: {
+        part1: { score: Number(part1Score.toFixed(2)), correct: part1Correct, total: part1Total },
+        part2: { score: Number(part2Score.toFixed(2)), correct: part2Correct, total: part2Total },
+        part3: { score: Number(part3Score.toFixed(2)), correct: part3Correct, total: part3Total }
+      }
+    };
+
     setEvaluation(evalResult);
 
     const safeExamCode = exam?.code || activeCode || '101';
@@ -552,6 +698,7 @@ export default function App() {
       examCode: safeExamCode,
       totalScore: finalScore,
       score: finalScore,
+      percentage: percentage,
       submittedAt: new Date().toLocaleString('vi-VN'),
       timeSpentSeconds: Math.max(0, ((exam?.durationMinutes || 45) * 60) - timeRemainingSeconds),
       submissionReason: 'normal',
@@ -573,16 +720,19 @@ export default function App() {
       return updated;
     });
 
+    // Chuyển sang màn hình kết quả ngay lập tức để tránh Safari bị đơ
+    setStudentExamPhase('student_results');
+
+    // Đẩy dữ liệu lên MongoDB ngầm ở phía sau mà không chặn luồng hiển thị giao diện
     try {
-      await fetch('/api/submissions', {
+      fetch('/api/submissions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSub)
-      });
-      fetchAllDataFromMongo();
+      }).then(() => {
+        fetchAllDataFromMongo();
+      }).catch((err) => console.warn('Lỗi ghi MongoDB ngầm:', err));
     } catch (err) {}
-
-    setStudentExamPhase('student_results');
   };
 
   const handleDeleteSubmission = async (submissionId: string) => {
@@ -643,6 +793,8 @@ export default function App() {
     try {
       if (document.documentElement.requestFullscreen) {
         document.documentElement.requestFullscreen().catch(() => {});
+      } else if ((document.documentElement as any).webkitRequestFullscreen) {
+        (document.documentElement as any).webkitRequestFullscreen();
       }
     } catch (err) {}
 
@@ -885,21 +1037,33 @@ export default function App() {
               )}
 
               {studentExamPhase === 'student_results' && evaluation && (
-                <ExamResults
-                  exam={safeCurrentExam}
-                  answers={answers || {}}
+                <ResultsErrorBoundary
                   evaluation={evaluation}
                   candidateInfo={candidateInfo}
-                  timeRemainingSeconds={timeRemainingSeconds}
-                  auditLog={auditLog}
+                  exam={safeCurrentExam}
                   onRetake={() => {
                     setAnswers({});
                     setStudentExamPhase('launch');
                     setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
                   }}
                   onOpenTeacherMode={handleRequestTeacherMode}
-                  onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
-                />
+                >
+                  <ExamResults
+                    exam={safeCurrentExam}
+                    answers={answers || {}}
+                    evaluation={evaluation}
+                    candidateInfo={candidateInfo}
+                    timeRemainingSeconds={timeRemainingSeconds}
+                    auditLog={auditLog}
+                    onRetake={() => {
+                      setAnswers({});
+                      setStudentExamPhase('launch');
+                      setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
+                    }}
+                    onOpenTeacherMode={handleRequestTeacherMode}
+                    onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
+                  />
+                </ResultsErrorBoundary>
               )}
             </>
           )}
