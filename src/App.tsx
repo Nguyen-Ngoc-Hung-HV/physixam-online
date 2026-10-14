@@ -15,7 +15,7 @@ import {
 const DEFAULT_EXAM: Exam = {
   id: 'exam-101',
   code: '101',
-  title: 'Khảo thí Vật lí 10 - Ôn tập Chuyển động thẳng',
+  title: 'Khảo thí Vật lí - Đề kiểm tra chuẩn',
   durationMinutes: 45,
   totalPoints: 10,
   questions: [
@@ -33,21 +33,6 @@ const DEFAULT_EXAM: Exam = {
       correctAnswer: 'opt-A',
       explanation: 'Áp dụng công thức $s = v \\cdot t = 5 \\cdot 4 = 20\\text{ m}$.',
       points: 2.5
-    },
-    {
-      id: 'q-demo-2',
-      code: 'C02',
-      type: 'multiple_choice',
-      prompt: 'Đơn vị đo của gia tốc trong hệ SI là',
-      options: [
-        { id: 'opt-2A', label: 'A', text: '$\\text{m/s}^2$' },
-        { id: 'opt-2B', label: 'B', text: '$\\text{m/s}$' },
-        { id: 'opt-2C', label: 'C', text: '$\\text{km/h}$' },
-        { id: 'opt-2D', label: 'D', text: '$\\text{m}\\cdot\\text{s}$' }
-      ],
-      correctAnswer: 'opt-2A',
-      explanation: 'Đơn vị chuẩn của gia tốc trong hệ SI là mét trên giây bình phương ($\\text{m/s}^2$).',
-      points: 2.5
     }
   ]
 } as any;
@@ -60,14 +45,6 @@ const PRESET_BANNERS = [
   {
     name: 'Vũ trụ & Hạt cơ bản',
     url: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop'
-  },
-  {
-    name: 'Điện từ trường & Phòng thí nghiệm',
-    url: 'https://images.unsplash.com/photo-1532094349884-543bc11b234d?q=80&w=2070&auto=format&fit=crop'
-  },
-  {
-    name: 'Công nghệ & Ánh sáng Laser',
-    url: 'https://images.unsplash.com/photo-1518770660439-4636190af475?q=80&w=2070&auto=format&fit=crop'
   }
 ];
 
@@ -149,8 +126,8 @@ export default function App() {
         .filter((c: any): c is string => typeof c === 'string' && c.trim().length > 0);
       if (codes.length > 0) return codes;
     }
-    return [exam?.code || '101'];
-  }, [bundle, exam?.code]);
+    return [activeCode || exam?.code || '101'];
+  }, [bundle, exam?.code, activeCode]);
 
   const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
     try {
@@ -164,7 +141,7 @@ export default function App() {
   const [assignments, setAssignments] = useState<ExamAssignmentInfo[]>(() => {
     try {
       const saved = localStorage.getItem('physixam_assignments');
-      return saved ? JSON.parse(saved) : [];
+      if (saved) return JSON.parse(saved);
     } catch (e) {
       return [];
     }
@@ -182,13 +159,11 @@ export default function App() {
   const [timeRemainingSeconds, setTimeRemainingSeconds] = useState<number>(45 * 60);
   const [evaluation, setEvaluation] = useState<any>(null);
 
-  // THÔNG TIN BẮT BUỘC CỦA THÍ SINH
   const [candidateInfo, setCandidateInfo] = useState({
     name: '',
     studentClass: '',
     candidateNumber: ''
   });
-  // BAN ĐẦU LUÔN BẰNG FALSE ĐỂ BẮT BUỘC ĐI QUA CỔNG ĐĂNG KÝ
   const [isRegistered, setIsRegistered] = useState<boolean>(false);
 
   const [auditLog, setAuditLog] = useState<{ violations: ViolationEvent[] }>({ violations: [] });
@@ -198,9 +173,48 @@ export default function App() {
   } as any);
 
   // =========================================================================
-  // TỆP 2: NẠP ĐỀ TỰ ĐỘNG TỪ MONGODB ATLAS KHI MỞ LINK / QUÉT QR (ĐÃ CẬP NHẬT)
-  // Ưu tiên tải trực tiếp bản ghi mới nhất từ máy chủ, vượt qua cache cũ cục bộ
+  // ĐỒNG BỘ TOÀN DIỆN TỪ MONGODB ATLAS: SUBMISSIONS & ASSIGNMENTS
   // =========================================================================
+  const fetchAllDataFromMongo = async () => {
+    // 1. Tải toàn bộ danh sách bài nộp của học sinh (Bảng điểm Panel 4)
+    try {
+      const resSub = await fetch('/api/submissions');
+      if (resSub.ok) {
+        const cloudData = await resSub.json();
+        if (Array.isArray(cloudData)) {
+          setSubmissions(cloudData);
+          if (safeStorage?.setItem) {
+            safeStorage.setItem('physixam_submissions', JSON.stringify(cloudData));
+          } else {
+            localStorage.setItem('physixam_submissions', JSON.stringify(cloudData));
+          }
+        }
+      }
+    } catch (err) {}
+
+    // 2. Tải toàn bộ danh sách bài thi đã giao (Mục Bài thi đã giao trong Ngân hàng)
+    try {
+      const resAssign = await fetch('/api/assignments');
+      if (resAssign.ok) {
+        const cloudAssigns = await resAssign.json();
+        if (Array.isArray(cloudAssigns) && cloudAssigns.length > 0) {
+          setAssignments(cloudAssigns);
+          localStorage.setItem('physixam_assignments', JSON.stringify(cloudAssigns));
+        }
+      }
+    } catch (err) {}
+  };
+
+  // Tự động đồng bộ mỗi 8 giây khi giáo viên đang ở trang quản trị
+  useEffect(() => {
+    fetchAllDataFromMongo();
+    const interval = setInterval(() => {
+      fetchAllDataFromMongo();
+    }, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Tải đề tự động khi học sinh quét mã QR / mở link
   useEffect(() => {
     const fetchExamFromMongo = async () => {
       try {
@@ -214,7 +228,6 @@ export default function App() {
 
         setIsLoadingAssignedExam(true);
 
-        // 1. Ưu tiên tải trực tiếp bản ghi mới nhất từ máy chủ MongoDB Atlas qua API
         try {
           const response = await fetch(`/api/assignments?code=${encodeURIComponent(targetCode)}`);
           if (response.ok) {
@@ -222,7 +235,8 @@ export default function App() {
             const cloudExam = doc?.examData || doc?.exam || (doc.questions ? doc : null);
             if (cloudExam && Array.isArray(cloudExam.questions) && cloudExam.questions.length > 0) {
               setExam(cloudExam);
-              setActiveCode(doc.code || doc.accessCode || cloudExam.code || targetCode);
+              const resolvedCode = doc.code || doc.accessCode || cloudExam.code || targetCode;
+              setActiveCode(resolvedCode);
               setTimeRemainingSeconds((cloudExam.durationMinutes || 45) * 60);
               
               if (safeStorage?.setItem) {
@@ -234,11 +248,8 @@ export default function App() {
               return;
             }
           }
-        } catch (netErr) {
-          console.warn('Lỗi fetch server, chuyển sang đọc bộ nhớ cục bộ:', netErr);
-        }
+        } catch (netErr) {}
 
-        // 2. Dự phòng: Nếu mất mạng thì mới kiểm tra trong assignments cục bộ
         const localMatched: any = assignments.find((a: any) => 
           String(a.id || '').toUpperCase() === targetCode.toUpperCase() ||
           String(a.code || a.accessCode || a.examCode || '').toUpperCase() === targetCode.toUpperCase()
@@ -246,39 +257,16 @@ export default function App() {
 
         if (localMatched && localMatched.examData && Array.isArray(localMatched.examData.questions) && localMatched.examData.questions.length > 0) {
           setExam(localMatched.examData);
-          setActiveCode(localMatched.code || localMatched.accessCode || localMatched.examCode || targetCode);
+          const resolvedCode = localMatched.code || localMatched.accessCode || localMatched.examCode || targetCode;
+          setActiveCode(resolvedCode);
           setTimeRemainingSeconds((localMatched.examData.durationMinutes || 45) * 60);
         }
-      } catch (err) {
-        console.warn('Lỗi kết nối tải đề thi:', err);
-      } finally {
+      } catch (err) {} finally {
         setIsLoadingAssignedExam(false);
       }
     };
 
     fetchExamFromMongo();
-  }, [assignments]);
-
-  useEffect(() => {
-    const fetchSubmissionsFromMongo = async () => {
-      try {
-        const response = await fetch('/api/submissions');
-        if (response.ok) {
-          const cloudData = await response.json();
-          if (Array.isArray(cloudData) && cloudData.length > 0) {
-            setSubmissions(cloudData);
-            try {
-              if (safeStorage?.setItem) {
-                safeStorage.setItem('physixam_submissions', JSON.stringify(cloudData));
-              } else {
-                localStorage.setItem('physixam_submissions', JSON.stringify(cloudData));
-              }
-            } catch (e) {}
-          }
-        }
-      } catch (err) {}
-    };
-    fetchSubmissionsFromMongo();
   }, []);
 
   useEffect(() => {
@@ -290,7 +278,6 @@ export default function App() {
     }
   }, [exam]);
 
-  // Bộ đếm thời gian CHỈ CHẠY khi thí sinh đã hoàn tất đăng ký
   useEffect(() => {
     if (studentExamPhase !== 'launch' || appMode !== 'student' || !isRegistered) return;
     const timer = setInterval(() => {
@@ -308,6 +295,7 @@ export default function App() {
 
   const handleRequestTeacherMode = () => {
     if (isTeacherAuthenticated) {
+      fetchAllDataFromMongo();
       setAppMode('teacher');
     } else {
       setEnteredPin('');
@@ -326,18 +314,11 @@ export default function App() {
       } catch {}
       setIsPinModalOpen(false);
       setPinError(null);
+      fetchAllDataFromMongo();
       setAppMode('teacher');
     } else {
       setPinError('Mã PIN bảo mật không chính xác. Vui lòng kiểm tra lại!');
     }
-  };
-
-  const handleSaveBranding = () => {
-    setBranding(brandingDraft);
-    try {
-      localStorage.setItem('physixam_branding', JSON.stringify(brandingDraft));
-    } catch (e) {}
-    setIsBrandingModalOpen(false);
   };
 
   const handleApplyBundle = (newBundle: ExamVariantBundle) => {
@@ -363,24 +344,14 @@ export default function App() {
   const handleSelectExamCode = (code: string) => {
     if (!code) return;
     setActiveCode(code);
-    if (bundle && Array.isArray(bundle.variants)) {
-      const matched: any = bundle.variants.find((v: any) => v?.code === code);
-      if (matched) {
-        const targetExam: Exam = matched.examData || matched;
-        if (targetExam && Array.isArray((targetExam as any).questions)) {
-          setExam(targetExam);
-          setAnswers({});
-          setFlaggedQuestionIds(new Set());
-          setCurrentQuestionIndex(0);
-          setTimeRemainingSeconds(((targetExam as any).durationMinutes || 45) * 60);
-        }
-      }
+    if (exam) {
+      setExam({ ...exam, code: code });
     }
   };
 
   const uploadExamToMongoDB = async (examToUpload: Exam, customCode?: string) => {
     try {
-      const finalCode = customCode || examToUpload.code || '101';
+      const finalCode = (customCode || examToUpload.code || activeCode || '101').trim().toUpperCase();
       await fetch('/api/assignments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -394,13 +365,14 @@ export default function App() {
           assignedAt: new Date().toISOString()
         })
       });
+      fetchAllDataFromMongo();
     } catch (e) {}
   };
 
   const handleLoadExamFromBank = (selectedPkg: ExamPackage) => {
     if (!selectedPkg || !selectedPkg.examData) return;
     const targetExam = selectedPkg.examData;
-    const targetCode = targetExam.code || selectedPkg.code || '101';
+    const targetCode = (targetExam.code || selectedPkg.code || '101').trim().toUpperCase();
     
     setExam(targetExam);
     setActiveCode(targetCode);
@@ -447,28 +419,9 @@ export default function App() {
     setIsJsonModalOpen(true);
   };
 
-  const handleApplyJson = () => {
-    try {
-      const parsed = JSON.parse(jsonText);
-      if (!parsed || !Array.isArray(parsed.questions)) {
-        throw new Error('Dữ liệu JSON không hợp lệ: Thiếu mảng questions.');
-      }
-      handleUpdateExamDirectly(parsed);
-      setIsJsonModalOpen(false);
-    } catch (err: any) {
-      setJsonError(err?.message || 'Định dạng JSON không hợp lệ.');
-    }
-  };
-
-  const handleCopyJson = () => {
-    navigator.clipboard.writeText(jsonText);
-    setJsonCopied(true);
-    setTimeout(() => setJsonCopied(false), 2000);
-  };
-
   const handleAssignExam = async (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
     const targetExam = pkg?.examData || (pkg as any)?.questions ? (pkg as any) : (exam || DEFAULT_EXAM);
-    const finalCode = (assignment as any)?.code || assignment.accessCode || targetExam.code || 'L12B1.3';
+    const finalCode = (assignment as any)?.code || assignment.accessCode || targetExam.code || activeCode || '101';
 
     const fullAssignment: any = {
       ...assignment,
@@ -486,7 +439,7 @@ export default function App() {
     };
 
     setAssignments((prev) => {
-      const updated = [fullAssignment, ...prev.filter((a) => a.id !== assignment.id)];
+      const updated = [fullAssignment, ...prev.filter((a) => a.id !== fullAssignment.id && (a as any).code !== fullAssignment.code && a.accessCode !== fullAssignment.code)];
       try {
         localStorage.setItem('physixam_assignments', JSON.stringify(updated));
       } catch (e) {}
@@ -501,12 +454,13 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fullAssignment)
       });
+      fetchAllDataFromMongo();
     } catch (e) {}
 
     if (switchToStudent) setAppMode('student');
   };
 
-  const handleDeleteAssignment = (assignId: string) => {
+  const handleDeleteAssignment = async (assignId: string) => {
     setAssignments((prev) => {
       const updated = prev.filter((a) => a.id !== assignId);
       try {
@@ -514,6 +468,11 @@ export default function App() {
       } catch (e) {}
       return updated;
     });
+
+    try {
+      await fetch(`/api/assignments?id=${encodeURIComponent(assignId)}`, { method: 'DELETE' });
+      fetchAllDataFromMongo();
+    } catch (e) {}
   };
 
   const handleAnswerChange = (questionId: string, answer: any) => {
@@ -588,7 +547,7 @@ export default function App() {
       id: `sub-${Date.now()}`,
       studentName: candidateInfo.name || 'Thí sinh tự do',
       candidateName: candidateInfo.name || 'Thí sinh tự do',
-      studentClass: candidateInfo.studentClass || '10A',
+      studentClass: candidateInfo.studentClass || '11A',
       candidateNumber: candidateInfo.candidateNumber || 'SBD-001',
       examCode: safeExamCode,
       totalScore: finalScore,
@@ -615,11 +574,12 @@ export default function App() {
     });
 
     try {
-      fetch('/api/submissions', {
+      await fetch('/api/submissions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSub)
-      }).catch((e) => console.warn('Lỗi ghi MongoDB Atlas:', e));
+      });
+      fetchAllDataFromMongo();
     } catch (err) {}
 
     setStudentExamPhase('student_results');
@@ -640,6 +600,7 @@ export default function App() {
 
     try {
       await fetch(`/api/submissions/${submissionId}`, { method: 'DELETE' });
+      fetchAllDataFromMongo();
     } catch (err) {}
   };
 
@@ -655,6 +616,7 @@ export default function App() {
 
     try {
       await fetch('/api/submissions/clear-all', { method: 'DELETE' });
+      fetchAllDataFromMongo();
     } catch (err) {}
   };
 
@@ -671,7 +633,6 @@ export default function App() {
     setTimeout(() => { window.print(); }, 300);
   };
 
-  // XÁC NHẬN BẮT ĐẦU THI & BẬT TOÀN MÀN HÌNH
   const handleStartExamWithRegistration = (e: React.FormEvent) => {
     e.preventDefault();
     if (!candidateInfo.name.trim() || !candidateInfo.studentClass.trim() || !candidateInfo.candidateNumber.trim()) {
@@ -708,7 +669,7 @@ export default function App() {
         }
       `}</style>
 
-      {/* 1. THANH ĐIỀU HƯỚNG NỔI (ẨN HOÀN TOÀN KHI THÍ SINH ĐANG LÀM BÀI) */}
+      {/* THANH ĐIỀU HƯỚNG NỔI */}
       {!(appMode === 'student' && isRegistered && studentExamPhase === 'launch') && (
         <header className="sticky top-0 z-40 px-3 sm:px-6 py-2.5 print:hidden">
           <div className="max-w-7xl mx-auto backdrop-blur-xl bg-slate-900/90 border border-slate-800/80 rounded-2xl shadow-xl shadow-slate-950/20 px-4 py-2 flex items-center justify-between gap-4">
@@ -718,17 +679,9 @@ export default function App() {
               className="flex items-center gap-3 cursor-pointer group select-none min-w-0"
               title="Về Trang chủ Pano"
             >
-              {branding.logoUrl ? (
-                <img 
-                  src={branding.logoUrl} 
-                  alt="Logo" 
-                  className="w-8 h-8 rounded-xl object-contain bg-white/10 p-1 border border-white/20 group-hover:scale-105 transition shadow-sm shrink-0" 
-                />
-              ) : (
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
-                  <Atom className="w-4 h-4" />
-                </div>
-              )}
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
+                <Atom className="w-4 h-4" />
+              </div>
               <div className="min-w-0">
                 <span className="font-black text-sm tracking-wide text-white group-hover:text-indigo-300 transition truncate block">
                   {branding.schoolName}
@@ -739,96 +692,53 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800">
               <button
                 type="button"
-                onClick={() => {
-                  setBrandingDraft(branding);
-                  setIsBrandingModalOpen(true);
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 transition cursor-pointer"
-                title="Tùy biến Logo và Hình nền Pano Banner"
+                onClick={() => setAppMode('home')}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                  appMode === 'home'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
               >
-                <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
-                <span className="hidden md:inline">Đổi Pano / Logo</span>
+                <Home className="w-3.5 h-3.5" />
+                <span>Trang chủ</span>
               </button>
 
-              <div className="flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setAppMode('home')}
-                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                    appMode === 'home'
-                      ? 'bg-indigo-600 text-white shadow-md'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Home className="w-3.5 h-3.5" />
-                  <span>Trang chủ</span>
-                </button>
+              <button
+                type="button"
+                onClick={handleRequestTeacherMode}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                  appMode === 'teacher'
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {isTeacherAuthenticated ? <LayoutDashboard className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
+                <span>Giáo viên</span>
+              </button>
 
-                <button
-                  type="button"
-                  onClick={handleRequestTeacherMode}
-                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                    appMode === 'teacher'
-                      ? 'bg-indigo-600 text-white shadow-md'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                  title={isTeacherAuthenticated ? 'Bảng điều khiển Giáo viên' : 'Yêu cầu Mã PIN để truy cập'}
-                >
-                  {isTeacherAuthenticated ? <LayoutDashboard className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
-                  <span>Giáo viên</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setAppMode('student')}
-                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                    appMode === 'student'
-                      ? 'bg-emerald-600 text-white shadow-md'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <GraduationCap className="w-3.5 h-3.5" />
-                  <span>Học sinh</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setAppMode('student')}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                  appMode === 'student'
+                    ? 'bg-emerald-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <GraduationCap className="w-3.5 h-3.5" />
+                <span>Học sinh</span>
+              </button>
             </div>
           </div>
         </header>
       )}
 
-      {/* CHẾ ĐỘ 1: TRANG CHỦ */}
+      {/* CHẾ ĐỘ TRANG CHỦ */}
       {appMode === 'home' && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 space-y-4 animate-in fade-in duration-300">
-          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-950 border border-indigo-800/40 shadow-md backdrop-blur-md py-2.5 px-4 flex items-center gap-3 text-white group">
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-600 text-white font-black text-3xs uppercase tracking-wider shrink-0 shadow-sm border border-indigo-400/30">
-              <Megaphone className="w-3.5 h-3.5 text-amber-300 animate-bounce" />
-              <span className="hidden sm:inline">Thông Điệp Khảo Thí</span>
-              <span className="sm:hidden">Tin Mới</span>
-            </div>
-
-            <div className="flex-1 overflow-hidden relative select-none">
-              <div className="marquee-track flex items-center gap-8 font-medium text-xs text-indigo-100 cursor-default">
-                <span>{branding.tickerText || DEFAULT_BRANDING.tickerText}</span>
-                <span className="text-amber-300">✦</span>
-                <span>{branding.tickerText || DEFAULT_BRANDING.tickerText}</span>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setBrandingDraft(branding);
-                setIsBrandingModalOpen(true);
-              }}
-              className="text-3xs text-indigo-300 hover:text-white underline font-semibold shrink-0 cursor-pointer hidden md:inline transition"
-            >
-              Chỉnh sửa
-            </button>
-          </div>
-
           <section className="relative rounded-3xl overflow-hidden shadow-xl border border-indigo-900/40 bg-slate-950 min-h-[250px] sm:min-h-[290px] flex items-center">
             <div 
               className="absolute inset-0 bg-cover bg-center transition-all duration-700 filter brightness-75 scale-105"
@@ -875,7 +785,7 @@ export default function App() {
         </div>
       )}
 
-      {/* CHẾ ĐỘ 2: HỌC SINH THI TRỰC TUYẾN */}
+      {/* CHẾ ĐỘ HỌC SINH */}
       {appMode === 'student' && (
         <main className="w-full px-2 sm:px-4 py-2">
           {isLoadingAssignedExam ? (
@@ -885,9 +795,6 @@ export default function App() {
               <p className="text-xs text-slate-500 max-w-sm">Hệ thống đang đồng bộ câu hỏi và cấu trúc bài thi về thiết bị của em.</p>
             </div>
           ) : !isRegistered ? (
-            /* ========================================================================= */
-            /* MÀN HÌNH BẮT BUỘC ĐĂNG KÝ: HỌ TÊN, LỚP, SBD TRƯỚC KHI VÀO ĐỀ THI          */
-            /* ========================================================================= */
             <div className="min-h-[80vh] flex items-center justify-center p-4 animate-in fade-in duration-300">
               <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-200 space-y-6">
                 
@@ -928,7 +835,7 @@ export default function App() {
                         required
                         value={candidateInfo.studentClass}
                         onChange={(e) => setCandidateInfo({ ...candidateInfo, studentClass: e.target.value })}
-                        placeholder="Ví dụ: 12A1"
+                        placeholder="Ví dụ: 11A1"
                         className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition"
                       />
                     </div>
@@ -942,19 +849,10 @@ export default function App() {
                         required
                         value={candidateInfo.candidateNumber}
                         onChange={(e) => setCandidateInfo({ ...candidateInfo, candidateNumber: e.target.value })}
-                        placeholder="Ví dụ: 1201"
+                        placeholder="Ví dụ: 1101"
                         className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition font-mono"
                       />
                     </div>
-                  </div>
-
-                  <div className="p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-100 text-3xs text-indigo-900 space-y-1">
-                    <div className="font-bold flex items-center gap-1.5 text-xs text-indigo-700">
-                      <Maximize2 className="w-3.5 h-3.5" />
-                      <span>Quy chế thi trực tuyến:</span>
-                    </div>
-                    <p>• Khi bấm bắt đầu, hệ thống sẽ kích hoạt <strong>Toàn màn hình</strong> để tối đa hóa diện tích và kích hoạt giám sát thi.</p>
-                    <p>• Thí sinh tuyệt đối không thoát toàn màn hình hay rời trang thi khi chưa nộp bài.</p>
                   </div>
 
                   <button
@@ -1008,7 +906,7 @@ export default function App() {
         </main>
       )}
 
-      {/* CHẾ ĐỘ 3: BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
+      {/* CHẾ ĐỘ BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
       {appMode === 'teacher' && (
         <TeacherDashboard
           exam={safeCurrentExam}
@@ -1036,10 +934,11 @@ export default function App() {
             setAppMode('student');
           }}
           onNavigateHome={() => setAppMode('home')}
+          onRefreshData={fetchAllDataFromMongo}
         />
       )}
 
-      {/* CHẾ ĐỘ 4: IN ẤN */}
+      {/* CHẾ ĐỘ IN ẤN */}
       {appMode === 'print' && (
         <div className="bg-white p-6 sm:p-10 rounded-3xl shadow-sm border border-slate-200 print:border-none print:shadow-none print:p-0">
           <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
@@ -1063,7 +962,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL MÃ PIN GIÁO VIÊN */}
+      {/* MODAL MÃ PIN */}
       {isPinModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 print:hidden animate-in fade-in duration-200">
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-5">

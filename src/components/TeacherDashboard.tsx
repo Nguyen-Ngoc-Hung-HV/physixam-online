@@ -77,6 +77,7 @@ interface TeacherDashboardProps {
   initialPanel?: DashboardPanel;
   initialSubtabIndex?: number;
   onNavigateHome?: () => void;
+  onRefreshData?: () => void;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -109,6 +110,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   initialPanel,
   initialSubtabIndex,
   onNavigateHome,
+  onRefreshData
 }) => {
   // Lớp phòng vệ an toàn cho exam và questions
   const safeExam: Exam = useMemo(() => {
@@ -118,14 +120,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
     return {
       id: raw?.id || 'exam-fallback',
-      code: raw?.code || '101',
+      code: raw?.code || activeCode || '101',
       title: raw?.title || 'Đề thi Khảo thí Vật lí',
       subtitle: raw?.subtitle || '',
       durationMinutes: raw?.durationMinutes || 45,
       totalPoints: raw?.totalPoints || 10,
       questions: Array.isArray(raw?.questions) ? raw.questions : []
     } as any;
-  }, [propExam, propCurrentExam]);
+  }, [propExam, propCurrentExam, activeCode]);
 
   const safeQuestions: Question[] = useMemo(() => {
     return Array.isArray(safeExam?.questions) ? safeExam.questions : [];
@@ -147,6 +149,24 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const [panel4Tab, setPanel4Tab] = useState<'submissions' | 'distribution' | 'export_report'>('submissions');
   const [panel5Tab, setPanel5Tab] = useState<'print_student' | 'print_teacher'>('print_student');
   const [panel6Tab, setPanel6Tab] = useState<'teachers' | 'students' | 'rbac'>('teachers');
+
+  // Chỉnh sửa trực tiếp mã đề
+  const [isEditingCode, setIsEditingCode] = useState<boolean>(false);
+  const [customCodeInput, setCustomCodeInput] = useState<string>(activeCode || safeExam.code || '101');
+
+  useEffect(() => {
+    setCustomCodeInput(activeCode || safeExam.code || '101');
+  }, [activeCode, safeExam.code]);
+
+  const handleSaveCustomCode = () => {
+    const trimmed = customCodeInput.trim().toUpperCase();
+    if (!trimmed) return;
+    const updatedExam = { ...safeExam, code: trimmed };
+    onUpdateExam(updatedExam);
+    onSelectExamCode(trimmed);
+    setIsEditingCode(false);
+    showToast(`Đã đổi mã bài thi thành: ${trimmed}`);
+  };
 
   const wordFileInputRef = useRef<HTMLInputElement>(null);
   const [wordFile, setWordFile] = useState<File | null>(null);
@@ -185,7 +205,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const [isSaveExamModalOpen, setIsSaveExamModalOpen] = useState<boolean>(false);
   const [localPackages, setLocalPackages] = useState<ExamPackage[]>(() => getSavedExamPackages());
-  const allPackages = externalPackages && externalPackages.length > 0 ? externalPackages : localPackages;
+  const allPackages = useMemo(() => {
+    return externalPackages && externalPackages.length > 0 ? externalPackages : localPackages;
+  }, [externalPackages, localPackages]);
 
   const [localAssignments, setLocalAssignments] = useState<ExamAssignmentInfo[]>(() => {
     try {
@@ -194,21 +216,17 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     } catch {}
     return [];
   });
-  const allAssignments = (externalAssignments && externalAssignments.length > 0) ? externalAssignments : localAssignments;
+  
+  const allAssignments = useMemo(() => {
+    return (externalAssignments && externalAssignments.length > 0) ? externalAssignments : localAssignments;
+  }, [externalAssignments, localAssignments]);
 
   const [panel1ViewMode, setPanel1ViewMode] = useState<'curriculum_bank' | 'current_exam_questions' | 'assigned_management'>('curriculum_bank');
-  const [filterGrade, setFilterGrade] = useState<GradeLevel | 'all'>('all');
-  const [filterCategory, setFilterCategory] = useState<ExamCategory | 'all'>('all');
-  const [filterChapterId, setFilterChapterId] = useState<string>('all');
-  const [filterLessonId, setFilterLessonId] = useState<string>('all');
-  const [filterSearch, setFilterSearch] = useState<string>('');
-
   const [assigningPackage, setAssigningPackage] = useState<ExamPackage | null>(null);
   const [selectedPartFilter, setSelectedPartFilter] = useState<'all' | 'Phần I' | 'Phần II' | 'Phần III'>('all');
   const [selectedCognitiveLevelFilter, setSelectedCognitiveLevelFilter] = useState<'all' | 'NB' | 'TH' | 'VD' | 'VDC'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
-  const [selectedDiagramSourceId, setSelectedDiagramSourceId] = useState<string | null>(null);
 
   const [inspectingSubmission, setInspectingSubmission] = useState<StudentSubmission | null>(null);
   const [submissionFilter, setSubmissionFilter] = useState<'all' | 'submitted' | 'violated'>('all');
@@ -253,24 +271,38 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     }
   };
 
+  // LƯU ĐỀ VÀO NGÂN HÀNG: ĐỒNG THỜI CẬP NHẬT MÃ ĐỀ & ĐỀ HIỆN HÀNH
   const handleSavePackage = (newPkg: ExamPackage) => {
+    // 1. Chuẩn hóa grade dạng number
+    const normalizedPkg: ExamPackage = {
+      ...newPkg,
+      grade: (typeof newPkg.grade === 'string' ? (parseInt(newPkg.grade, 10) || 11) : (newPkg.grade || 11)) as any,
+      code: (newPkg.code || customCodeInput || safeExam.code || '101').trim().toUpperCase()
+    };
+
     if (onSaveExamPackage) {
-      onSaveExamPackage(newPkg);
+      onSaveExamPackage(normalizedPkg);
     } else {
       setLocalPackages((prev) => {
-        const idx = prev.findIndex((p) => p.id === newPkg.id);
+        const idx = prev.findIndex((p) => p.id === normalizedPkg.id || p.code === normalizedPkg.code);
         let updated: ExamPackage[];
         if (idx >= 0) {
           updated = [...prev];
-          updated[idx] = newPkg;
+          updated[idx] = normalizedPkg;
         } else {
-          updated = [newPkg, ...prev];
+          updated = [normalizedPkg, ...prev];
         }
         saveExamPackagesToStorage(updated);
         return updated;
       });
     }
-    showToast(`Đã lưu thành công đề thi '${newPkg.title}' vào Ngân hàng đề (Khối ${newPkg.grade})!`);
+
+    // 2. Cập nhật mã đề và dữ liệu đề hiện hành cho GV/HS
+    if (normalizedPkg.examData) {
+      onUpdateExam(normalizedPkg.examData);
+    }
+    onSelectExamCode(normalizedPkg.code);
+    showToast(`Đã lưu thành công đề thi [${normalizedPkg.code}] vào Ngân hàng đề Khối ${normalizedPkg.grade}!`);
   };
 
   const handleDeleteExamPackage = (pkgId: string) => {
@@ -297,12 +329,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     } else {
       onUpdateExam(pkg.examData);
     }
+    onSelectExamCode(pkg.code);
     showToast(`Đã nạp đề thi [Mã: ${pkg.code}] "${pkg.title}" vào hệ thống khảo thí!`);
   };
 
   const handleBankAssignExam = async (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
     const targetExam = pkg?.examData || safeExam;
-    const finalCode = assignment.accessCode || (assignment as any).code || targetExam.code || 'L10GHKI';
+    const finalCode = assignment.accessCode || (assignment as any).code || targetExam.code || activeCode || '101';
 
     const fullAssignment: any = {
       ...assignment,
@@ -327,6 +360,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         localStorage.setItem('physixam_assignments', JSON.stringify([fullAssignment, ...localAssignments.filter((a) => a.id !== fullAssignment.id)]));
       } catch {}
       onUpdateExam(targetExam);
+      onSelectExamCode(finalCode);
 
       try {
         await fetch('/api/assignments', {
@@ -367,22 +401,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     const part2 = safeQuestions.filter((q) => q?.part === 'Phần II').length;
     const part3 = safeQuestions.filter((q) => q?.part === 'Phần III').length;
     return { part1, part2, part3, total: safeQuestions.length };
-  }, [safeQuestions]);
-
-  const cognitiveStats = useMemo(() => {
-    let nb = 0;
-    let th = 0;
-    let vd = 0;
-    let vdc = 0;
-    safeQuestions.forEach((q) => {
-      if (!q) return;
-      const lvl = getQuestionCognitiveLevel(q);
-      if (lvl === 'NB') nb++;
-      else if (lvl === 'TH') th++;
-      else if (lvl === 'VD') vd++;
-      else if (lvl === 'VDC') vdc++;
-    });
-    return { nb, th, vd, vdc, total: safeQuestions.length };
   }, [safeQuestions]);
 
   const filteredQuestions = useMemo(() => {
@@ -544,12 +562,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const handleApplyWordExam = () => {
     if (!wordParseResult) return;
     onUpdateExam(wordParseResult.exam);
+    if (wordParseResult.exam.code) onSelectExamCode(wordParseResult.exam.code);
     showToast(`Đã áp dụng đề thi "${wordParseResult.exam.title}" (${wordParseResult.exam.questions.length} câu) thành công!`);
   };
 
-  // =========================================================================
-  // TAB 2.4: BỘ PHÂN GIẢI JSON THÔNG MINH
-  // =========================================================================
   const parseJsonExamFile = (jsonData: any): Exam => {
     const root = jsonData?.exam || jsonData?.data || jsonData || {};
 
@@ -695,7 +711,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     });
 
     const finalTitle = root.title || jsonData.title || 'Đề khảo thí Vật lí (Nhập từ JSON)';
-    const finalGrade = root.grade || jsonData.grade || 12;
+    const finalGrade = root.grade || jsonData.grade || 11;
     const finalCode = root.code || jsonData.code || `L${finalGrade}-${Date.now().toString().slice(-4)}`;
     const finalDuration = Number(root.duration || root.durationMinutes || jsonData.duration || jsonData.durationMinutes || 45);
 
@@ -750,6 +766,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const handleApplyJsonExam = () => {
     if (!jsonParsedExam) return;
     onUpdateExam(jsonParsedExam);
+    if (jsonParsedExam.code) onSelectExamCode(jsonParsedExam.code);
     showToast(`Đã áp dụng đề thi "${jsonParsedExam.title}" (${jsonParsedExam.questions.length} câu) thành công!`);
   };
 
@@ -787,11 +804,44 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 {safeExam.title}
               </span>
               <span className="px-2 py-0.5 rounded-md font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                {safeExam.gradeLevel ? safeExam.gradeLevel.replace(/\s*\(?Chương trình GDPT 2018\)?/gi, '').trim() : 'Lớp 12'}
+                {safeExam.gradeLevel ? safeExam.gradeLevel.replace(/\s*\(?Chương trình GDPT 2018\)?/gi, '').trim() : 'Lớp 11'}
               </span>
-              <span className="px-2 py-0.5 rounded-md font-mono font-bold bg-slate-100 text-slate-700">
-                Mã: {activeCode}
-              </span>
+
+              {/* NƠI XEM & SỬA MÃ ĐỀ TRỰC TIẾP */}
+              {isEditingCode ? (
+                <div className="inline-flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={customCodeInput}
+                    onChange={(e) => setCustomCodeInput(e.target.value)}
+                    placeholder="Nhập mã đề"
+                    className="w-24 px-2 py-0.5 rounded font-mono font-bold text-xs bg-amber-50 border border-amber-400 text-amber-950 uppercase outline-none"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleSaveCustomCode}
+                    className="px-2 py-0.5 rounded bg-emerald-600 text-white font-bold text-3xs cursor-pointer hover:bg-emerald-700"
+                  >
+                    Lưu mã
+                  </button>
+                  <button
+                    onClick={() => setIsEditingCode(false)}
+                    className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-3xs cursor-pointer hover:bg-slate-300"
+                  >
+                    Hủy
+                  </button>
+                </div>
+              ) : (
+                <div 
+                  onClick={() => setIsEditingCode(true)}
+                  className="px-2 py-0.5 rounded-md font-mono font-bold bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-900 cursor-pointer border border-slate-200 hover:border-amber-300 transition flex items-center gap-1"
+                  title="Bấm để sửa mã đề thi"
+                >
+                  <span>Mã: {activeCode || safeExam.code || '101'}</span>
+                  <Edit3 className="w-3 h-3 text-slate-400" />
+                </div>
+              )}
+
               <span className="text-slate-500 font-medium">
                 • {partStats.total} câu ({safeExam.durationMinutes || 45} phút)
               </span>
@@ -807,6 +857,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
         {/* Cụm hành động nhanh trong Workspace */}
         <div className="flex items-center gap-2 w-full md:w-auto justify-end flex-wrap">
+          {onRefreshData && (
+            <button
+              type="button"
+              onClick={onRefreshData}
+              className="py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-200 transition cursor-pointer flex items-center gap-1.5"
+              title="Đồng bộ dữ liệu mới nhất từ máy chủ MongoDB"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Đồng bộ mới</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => setIsSaveExamModalOpen(true)}
@@ -892,13 +954,16 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <span className={`px-2 py-0.5 rounded-full text-2xs ${
               activePanel === 'panel3' || activePanel === 'config' ? 'bg-amber-700 text-amber-100' : 'bg-slate-200 text-slate-700'
             }`}>
-              {bundle ? `${bundle.variants.length} mã` : 'Mã ' + activeCode}
+              Mã {activeCode || safeExam.code || '101'}
             </span>
           </button>
 
           <button
             type="button"
-            onClick={() => setActivePanel('panel4')}
+            onClick={() => {
+              setActivePanel('panel4');
+              if (onRefreshData) onRefreshData();
+            }}
             className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
               activePanel === 'panel4' || activePanel === 'monitoring'
                 ? 'bg-emerald-600 text-white shadow-xs'
@@ -1033,7 +1098,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       Đề thi đang chọn
                     </span>
                     <span className="px-2.5 py-0.5 rounded-full text-2xs font-mono font-bold bg-amber-400/20 text-amber-200">
-                      Mã {activeCode}
+                      Mã {activeCode || safeExam.code || '101'}
                     </span>
                   </div>
                   <h3 className="text-base sm:text-lg font-black text-white">{safeExam.title}</h3>
@@ -1050,22 +1115,22 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     <span>💾 Lưu đề này vào Ngân hàng</span>
                   </button>
 
-                  {/* NÚT GIAO ĐỀ: ĐỒNG BỘ 100% VỚI safeExam ĐANG CHỌN */}
                   <button
                     type="button"
                     onClick={() => {
+                      const currentCode = (activeCode || safeExam.code || '101').trim().toUpperCase();
                       const targetGrade = safeExam.gradeLevel 
-                        ? (parseInt(String(safeExam.gradeLevel).replace(/\D/g, ''), 10) || 12) 
-                        : 12;
+                        ? (parseInt(String(safeExam.gradeLevel).replace(/\D/g, ''), 10) || 11) 
+                        : 11;
 
                       const freshPkg: ExamPackage = {
-                        id: safeExam.id || `pkg-${activeCode || 'L12B1.3'}`,
+                        id: safeExam.id || `pkg-${currentCode}`,
                         grade: targetGrade as any,
                         category: 'survey',
                         categoryLabel: 'Chuẩn Bộ GD&ĐT',
                         chapterId: 'c1',
                         chapterTitle: safeExam.subtitle || 'Khảo thí Vật lí',
-                        code: safeExam.code || activeCode || 'L12B1.3',
+                        code: currentCode,
                         title: safeExam.title,
                         subtitle: safeExam.subtitle,
                         durationMinutes: safeExam.durationMinutes || 45,
@@ -1314,7 +1379,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                     {isParsingJson ? 'Đang đọc và phân tích cấu trúc tệp JSON...' : 'Nhấp hoặc kéo thả tệp đề thi (.json) vào đây'}
                   </span>
                   <span className="text-xs text-slate-500 mt-1 block">
-                    Tương thích hoàn toàn với cấu trúc JSON nhúng hình Base64 chuẩn GDPT 2018 (Hỗ trợ cấu trúc bọc "exam" hoặc phẳng)
+                    Tương thích hoàn toàn với cấu trúc JSON nhúng hình Base64 chuẩn GDPT 2018
                   </span>
                 </div>
                 <input
@@ -1362,24 +1427,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       <Check className="w-4 h-4" />
                       <span>Áp dụng vào đề thi hiện tại</span>
                     </button>
-                  </div>
-
-                  {/* Danh sách các câu hỏi tóm tắt trong tệp JSON */}
-                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                    {jsonParsedExam.questions.map((q: any, qIdx: number) => (
-                      <div key={q.id || qIdx} className="p-3 rounded-xl bg-white border border-slate-200 text-xs flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-bold text-indigo-700">{q.title || `Câu ${qIdx + 1}`}</span>
-                            <span className="px-1.5 py-0.5 rounded text-3xs bg-slate-100 text-slate-600 font-semibold">{q.part}</span>
-                            {(q.diagram || q.image) && (
-                              <span className="px-1.5 py-0.5 rounded text-3xs bg-amber-100 text-amber-800 font-bold">Có ảnh</span>
-                            )}
-                          </div>
-                          <p className="text-slate-700 line-clamp-2">{q.stem || q.prompt}</p>
-                        </div>
-                      </div>
-                    ))}
                   </div>
                 </div>
               )}
@@ -1442,7 +1489,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      {/* PANEL 4: GIÁM SÁT & BẢNG ĐIỂM */}
+      {/* PANEL 4: GIÁM SÁT & BẢNG ĐIỂM (CÓ TỰ ĐỘNG LÀM MỚI TỪ MONGODB) */}
       {(activePanel === 'panel4' || activePanel === 'monitoring') && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl p-1.5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3">
@@ -1488,8 +1535,20 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
+              {onRefreshData && (
+                <button
+                  type="button"
+                  onClick={onRefreshData}
+                  className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-black transition flex items-center gap-1.5 cursor-pointer"
+                  title="Cập nhật kết quả nộp bài mới nhất"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Cập nhật bảng điểm</span>
+                </button>
+              )}
+
               <span className="text-2xs text-slate-500 font-bold px-3 py-1 bg-slate-50 rounded-lg">
-                {submissions.length} bài nộp đã lưu
+                {submissions.length} bài nộp
               </span>
               
               {submissions.length > 0 && (
@@ -1500,7 +1559,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   title="Xóa toàn bộ danh sách kết quả bài thi trên máy và MongoDB Atlas"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                  <span>Xóa toàn bộ danh sách ({submissions.length})</span>
+                  <span>Xóa toàn bộ</span>
                 </button>
               )}
             </div>
@@ -1880,7 +1939,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         />
       )}
 
-      {/* MODAL GIAO ĐỀ THI: ĐẢM BẢO TRUYỀN currentExam={safeExam} ĐỂ KHÔNG BỊ TRÙNG ĐỀ CŨ */}
+      {/* MODAL GIAO ĐỀ THI */}
       {assigningPackage && (
         <AssignExamModal
           isOpen={true}
