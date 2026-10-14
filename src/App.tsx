@@ -40,23 +40,23 @@ class ResultsErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: any, errorInfo: ErrorInfo) {
-    console.warn('Bảo vệ Safari: Bắt lỗi render ExamResults an toàn:', error, errorInfo);
+    console.warn('Bảo vệ Safari: Bắt lỗi an toàn khi nộp bài:', error, errorInfo);
   }
 
   render() {
     if (this.state.hasError) {
       const { evaluation, candidateInfo, exam, onRetake, onOpenTeacherMode } = this.props;
-      const displayScore = Number(evaluation?.totalScore || evaluation?.score || 0).toFixed(2);
+      const displayScore = Number(evaluation?.totalScore ?? evaluation?.score ?? 0).toFixed(2);
       const correct = evaluation?.correctCount || 0;
       const total = evaluation?.totalQuestions || exam?.questions?.length || 0;
 
       return (
-        <div className="max-w-2xl mx-auto my-8 p-6 sm:p-8 bg-white rounded-3xl shadow-xl border border-slate-200 text-center space-y-6 animate-in fade-in">
+        <div className="max-w-2xl mx-auto my-8 p-6 sm:p-8 bg-white rounded-3xl shadow-xl border border-slate-200 text-center space-y-6">
           <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
             <CheckCircle2 className="w-10 h-10" />
           </div>
           <div className="space-y-1">
-            <h2 className="text-2xl font-black text-slate-900">Nộp Bài Thi Thành Công!</h2>
+            <h2 className="text-2xl font-black text-slate-900">Bài Thi Đã Nộp Thành Công!</h2>
             <p className="text-xs text-slate-500 font-medium">{exam?.title}</p>
           </div>
 
@@ -76,7 +76,7 @@ class ResultsErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           </div>
 
           <div className="p-6 rounded-3xl bg-gradient-to-tr from-emerald-600 to-teal-700 text-white shadow-lg space-y-1">
-            <div className="text-3xs uppercase tracking-widest text-emerald-200 font-bold">Điểm số bài thi</div>
+            <div className="text-3xs uppercase tracking-widest text-emerald-200 font-bold">Điểm tổng kết</div>
             <div className="text-5xl font-black">
               {displayScore}
               <span className="text-xl font-normal text-emerald-200"> / 10đ</span>
@@ -591,24 +591,10 @@ export default function App() {
   };
 
   // =========================================================================
-  // XỬ LÝ NỘP BÀI: AN TOÀN TUYỆT ĐỐI CHO SAFARI & CHROME
+  // XỬ LÝ NỘP BÀI: TỐI ƯU HÓA HOÀN TOÀN CHO SAFARI & CHROME
   // =========================================================================
   const handleSubmitExam = () => {
-    // 1. Thoát toàn màn hình an toàn cho WebKit/Safari
-    try {
-      if (typeof document !== 'undefined') {
-        const isFs = document.fullscreenElement || (document as any).webkitFullscreenElement;
-        if (isFs) {
-          if (document.exitFullscreen) {
-            document.exitFullscreen().catch(() => {});
-          } else if ((document as any).webkitExitFullscreen) {
-            (document as any).webkitExitFullscreen();
-          }
-        }
-      }
-    } catch (e) {}
-
-    // 2. Chấm điểm chính xác
+    // 1. Chấm điểm chính xác & an toàn
     let score = 0;
     const detailedFeedback: any[] = [];
     const questionsList = (exam && Array.isArray(exam.questions)) ? exam.questions : (DEFAULT_EXAM.questions || []);
@@ -669,7 +655,6 @@ export default function App() {
     const totalCount = questionsList.length;
     const percentage = Math.round((finalScore / 10) * 100);
 
-    // Bổ sung đầy đủ tất cả các trường để Safari không bị lỗi undefined property
     const evalResult = {
       totalScore: finalScore,
       score: finalScore,
@@ -685,8 +670,6 @@ export default function App() {
         part3: { score: Number(part3Score.toFixed(2)), correct: part3Correct, total: part3Total }
       }
     };
-
-    setEvaluation(evalResult);
 
     const safeExamCode = exam?.code || activeCode || '101';
     const newSub: StudentSubmission = {
@@ -708,6 +691,10 @@ export default function App() {
       evaluation: evalResult
     } as any;
 
+    // Gán kết quả vào state trước
+    setEvaluation(evalResult);
+
+    // Cập nhật bộ nhớ cục bộ
     setSubmissions((prev) => {
       const updated = [newSub, ...(prev || [])];
       try {
@@ -720,19 +707,35 @@ export default function App() {
       return updated;
     });
 
-    // Chuyển sang màn hình kết quả ngay lập tức để tránh Safari bị đơ
+    // 2. Chuyển sang màn hình kết quả ngay lập tức
     setStudentExamPhase('student_results');
 
-    // Đẩy dữ liệu lên MongoDB ngầm ở phía sau mà không chặn luồng hiển thị giao diện
-    try {
-      fetch('/api/submissions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newSub)
-      }).then(() => {
-        fetchAllDataFromMongo();
-      }).catch((err) => console.warn('Lỗi ghi MongoDB ngầm:', err));
-    } catch (err) {}
+    // 3. Hoãn các thao tác WebKit/DOM để Safari render xong khung hình
+    setTimeout(() => {
+      try {
+        if (typeof document !== 'undefined') {
+          const isFs = document.fullscreenElement || (document as any).webkitFullscreenElement;
+          if (isFs) {
+            if (document.exitFullscreen) {
+              document.exitFullscreen().catch(() => {});
+            } else if ((document as any).webkitExitFullscreen) {
+              (document as any).webkitExitFullscreen();
+            }
+          }
+        }
+      } catch (e) {}
+
+      // Gửi dữ liệu nền lên MongoDB
+      try {
+        fetch('/api/submissions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(newSub)
+        }).then(() => {
+          fetchAllDataFromMongo();
+        }).catch((err) => console.warn('Lỗi ghi MongoDB ngầm:', err));
+      } catch (err) {}
+    }, 50);
   };
 
   const handleDeleteSubmission = async (submissionId: string) => {
@@ -1036,7 +1039,8 @@ export default function App() {
                 />
               )}
 
-              {studentExamPhase === 'student_results' && evaluation && (
+              {/* HIỂN THỊ KẾT QUẢ VỚI LỚP BẢO VỆ CHỐNG TRẮNG TRANG */}
+              {studentExamPhase === 'student_results' && (
                 <ResultsErrorBoundary
                   evaluation={evaluation}
                   candidateInfo={candidateInfo}
@@ -1051,7 +1055,7 @@ export default function App() {
                   <ExamResults
                     exam={safeCurrentExam}
                     answers={answers || {}}
-                    evaluation={evaluation}
+                    evaluation={evaluation || { totalScore: 0, detailedFeedback: [] }}
                     candidateInfo={candidateInfo}
                     timeRemainingSeconds={timeRemainingSeconds}
                     auditLog={auditLog}
