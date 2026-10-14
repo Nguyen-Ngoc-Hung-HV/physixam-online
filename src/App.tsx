@@ -270,34 +270,69 @@ export default function App() {
   } as any);
 
   // =========================================================================
-  // ĐỒNG BỘ TOÀN DIỆN TỪ MONGODB ATLAS
+  // ĐỒNG BỘ TOÀN DIỆN TỪ MONGODB ATLAS: SUBMISSIONS & ASSIGNMENTS
   // =========================================================================
   const fetchAllDataFromMongo = async () => {
+    // 1. Tải toàn bộ danh sách bài nộp từ MongoDB Atlas (loại bỏ 3 bài mẫu mặc định)
     try {
-      const resSub = await fetch('/api/submissions');
+      const resSub = await fetch(`/api/submissions?t=${Date.now()}`);
       if (resSub.ok) {
         const cloudData = await resSub.json();
         if (Array.isArray(cloudData)) {
-          setSubmissions(cloudData);
-          if (safeStorage?.setItem) {
-            safeStorage.setItem('physixam_submissions', JSON.stringify(cloudData));
-          } else {
-            localStorage.setItem('physixam_submissions', JSON.stringify(cloudData));
+          const formattedSubs: StudentSubmission[] = cloudData.map((sub: any) => {
+            const rawScore = sub.totalScore ?? sub.score ?? sub.evaluation?.totalScore ?? 0;
+            const finalScore = Number(Number(rawScore).toFixed(2));
+            return {
+              id: sub.id || sub._id || `sub-${Date.now()}-${Math.random()}`,
+              studentName: sub.studentName || sub.candidateName || 'Thí sinh',
+              candidateName: sub.studentName || sub.candidateName || 'Thí sinh',
+              studentClass: sub.studentClass || '11',
+              candidateNumber: sub.candidateNumber || 'SBD-001',
+              examCode: sub.examCode || sub.code || activeCode || '101',
+              totalScore: finalScore,
+              score: finalScore,
+              percentage: sub.percentage || Math.round((finalScore / 10) * 100),
+              submittedAt: sub.submittedAt || new Date().toLocaleString('vi-VN'),
+              timeSpentSeconds: sub.timeSpentSeconds || 0,
+              submissionReason: sub.submissionReason || 'normal',
+              violationCount: sub.violationCount || sub.violations?.length || 0,
+              answers: sub.answers || {},
+              auditLog: sub.auditLog || { violations: [] },
+              evaluation: sub.evaluation || { totalScore: finalScore, detailedFeedback: [] }
+            } as any;
+          });
+
+          if (formattedSubs.length > 0) {
+            setSubmissions(formattedSubs);
+            try {
+              if (safeStorage?.setItem) {
+                safeStorage.setItem('physixam_submissions', JSON.stringify(formattedSubs));
+              } else {
+                localStorage.setItem('physixam_submissions', JSON.stringify(formattedSubs));
+              }
+            } catch (e) {}
           }
         }
       }
-    } catch (err) {}
+    } catch (err) {
+      console.warn('Lỗi đồng bộ submissions:', err);
+    }
 
+    // 2. Tải toàn bộ bài thi đã giao từ MongoDB Atlas
     try {
-      const resAssign = await fetch('/api/assignments');
+      const resAssign = await fetch(`/api/assignments?t=${Date.now()}`);
       if (resAssign.ok) {
         const cloudAssigns = await resAssign.json();
         if (Array.isArray(cloudAssigns) && cloudAssigns.length > 0) {
           setAssignments(cloudAssigns);
-          localStorage.setItem('physixam_assignments', JSON.stringify(cloudAssigns));
+          try {
+            localStorage.setItem('physixam_assignments', JSON.stringify(cloudAssigns));
+          } catch (e) {}
         }
       }
-    } catch (err) {}
+    } catch (err) {
+      console.warn('Lỗi đồng bộ assignments:', err);
+    }
   };
 
   useEffect(() => {

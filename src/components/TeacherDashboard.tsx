@@ -204,11 +204,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   }, [initialPanel, initialSubtabIndex]);
 
   const [isSaveExamModalOpen, setIsSaveExamModalOpen] = useState<boolean>(false);
-  const [localPackages, setLocalPackages] = useState<ExamPackage[]>(() => getSavedExamPackages());
-  const allPackages = useMemo(() => {
-    return externalPackages && externalPackages.length > 0 ? externalPackages : localPackages;
-  }, [externalPackages, localPackages]);
 
+  // =========================================================================
+  // THỨ TỰ KHAI BÁO CHUẨN: ASSIGNMENTS TRƯỚC -> PACKAGES SAU
+  // =========================================================================
   const [localAssignments, setLocalAssignments] = useState<ExamAssignmentInfo[]>(() => {
     try {
       const raw = localStorage.getItem('physixam_assignments');
@@ -220,6 +219,51 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const allAssignments = useMemo(() => {
     return (externalAssignments && externalAssignments.length > 0) ? externalAssignments : localAssignments;
   }, [externalAssignments, localAssignments]);
+
+  const [localPackages, setLocalPackages] = useState<ExamPackage[]>(() => getSavedExamPackages());
+
+  // Tự động hợp nhất đề tĩnh + đề đã giao từ MongoDB vào Ngân hàng
+  const allPackages = useMemo(() => {
+    const base = externalPackages && externalPackages.length > 0 ? externalPackages : localPackages;
+    const combined = [...base];
+
+    allAssignments.forEach((assign: any) => {
+      const examData = assign.examData || assign;
+      const assignCode = (assign.code || assign.accessCode || assign.examCode || examData?.code || '').trim().toUpperCase();
+      if (!assignCode) return;
+
+      const alreadyExists = combined.some(
+        (p) => String(p.code || '').toUpperCase() === assignCode || String(p.id) === String(assign.id)
+      );
+
+      if (!alreadyExists && examData && Array.isArray(examData.questions) && examData.questions.length > 0) {
+        let resolvedGrade: any = 11;
+        if (assignCode.startsWith('L10') || String(examData.gradeLevel).includes('10')) resolvedGrade = 10;
+        else if (assignCode.startsWith('L12') || String(examData.gradeLevel).includes('12')) resolvedGrade = 12;
+
+        combined.unshift({
+          id: assign.id || `pkg-${assignCode}`,
+          code: assignCode,
+          title: assign.title || assign.examTitle || examData.title || `Đề thi ${assignCode}`,
+          grade: resolvedGrade,
+          category: 'lesson_quiz',
+          categoryLabel: 'Luyện tập theo Bài',
+          chapterId: 'c1',
+          chapterTitle: examData.subtitle || 'Chương trình Vật lí GDPT 2018',
+          durationMinutes: examData.durationMinutes || 45,
+          totalPoints: examData.totalPoints || 10,
+          difficulty: 'Chuẩn Bộ GD&ĐT',
+          tags: ['Trực tuyến', 'GDPT 2018'],
+          svgCount: 0,
+          katexCount: 10,
+          examData: examData,
+          createdAt: assign.assignedAt ? assign.assignedAt.slice(0, 10) : new Date().toISOString().slice(0, 10)
+        } as ExamPackage);
+      }
+    });
+
+    return combined;
+  }, [externalPackages, localPackages, allAssignments]);
 
   const [panel1ViewMode, setPanel1ViewMode] = useState<'curriculum_bank' | 'current_exam_questions' | 'assigned_management'>('curriculum_bank');
   const [assigningPackage, setAssigningPackage] = useState<ExamPackage | null>(null);
@@ -273,7 +317,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   // LƯU ĐỀ VÀO NGÂN HÀNG: ĐỒNG THỜI CẬP NHẬT MÃ ĐỀ & ĐỀ HIỆN HÀNH
   const handleSavePackage = (newPkg: ExamPackage) => {
-    // 1. Chuẩn hóa grade dạng number
     const normalizedPkg: ExamPackage = {
       ...newPkg,
       grade: (typeof newPkg.grade === 'string' ? (parseInt(newPkg.grade, 10) || 11) : (newPkg.grade || 11)) as any,
@@ -297,7 +340,6 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       });
     }
 
-    // 2. Cập nhật mã đề và dữ liệu đề hiện hành cho GV/HS
     if (normalizedPkg.examData) {
       onUpdateExam(normalizedPkg.examData);
     }
@@ -355,9 +397,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     if (onAssignExam) {
       onAssignExam(pkg, fullAssignment, switchToStudent);
     } else {
-      setLocalAssignments((prev) => [fullAssignment, ...prev.filter((a) => a.id !== fullAssignment.id)]);
+      setLocalAssignments((prev: any[]) => [fullAssignment, ...prev.filter((a: any) => a.id !== fullAssignment.id)]);
       try {
-        localStorage.setItem('physixam_assignments', JSON.stringify([fullAssignment, ...localAssignments.filter((a) => a.id !== fullAssignment.id)]));
+        localStorage.setItem('physixam_assignments', JSON.stringify([fullAssignment, ...localAssignments.filter((a: any) => a.id !== fullAssignment.id)]));
       } catch {}
       onUpdateExam(targetExam);
       onSelectExamCode(finalCode);
@@ -387,7 +429,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     if (onDeleteAssignment) {
       onDeleteAssignment(assignId);
     } else {
-      const updated = localAssignments.filter((a) => a.id !== assignId);
+      const updated = localAssignments.filter((a: any) => a.id !== assignId);
       setLocalAssignments(updated);
       try {
         localStorage.setItem('physixam_assignments', JSON.stringify(updated));
