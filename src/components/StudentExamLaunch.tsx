@@ -199,22 +199,37 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
 
           <button
               type="button"
-              onClick={() => {
-                try {
-                  // Gỡ bỏ ngay các bộ chặn chuột/phím của Safari trước khi nộp
-                  if (typeof window !== 'undefined') {
-                    window.oncontextmenu = null;
-                    document.oncontextmenu = null;
-                    window.onkeydown = null;
-                    document.onkeydown = null;
-                    window.onblur = null;
-                  }
-                } catch (e) {}
-
-                if (window.confirm('Em có chắc chắn muốn nộp bài thi ngay bây giờ không?')) {
-                  onSubmitExam();
+              onClick={async () => {
+              try {
+                // 1. Mở khóa chuột phải và các phím tắt ngay lập tức
+                if (typeof window !== 'undefined') {
+                  window.oncontextmenu = null;
+                  document.oncontextmenu = null;
+                  window.onkeydown = null;
+                  document.onkeydown = null;
+                  window.onblur = null;
                 }
-              }}
+              } catch (e) {}
+
+              if (window.confirm('Em có chắc chắn muốn nộp bài thi ngay bây giờ không?')) {
+                // 2. Buộc Safari thoát toàn màn hình trước khi React render trang kết quả
+                try {
+                  const doc: any = document;
+                  if (doc && (doc.webkitFullscreenElement || doc.fullscreenElement || doc.webkitIsFullScreen)) {
+                    if (doc.webkitExitFullscreen) {
+                      await doc.webkitExitFullscreen();
+                    } else if (doc.exitFullscreen) {
+                      await doc.exitFullscreen();
+                    }
+                  }
+                } catch (err) {}
+
+                // 3. Cho Safari nhịp nghỉ 100ms để ổn định WebKit rồi mới nộp bài
+                setTimeout(() => {
+                  onSubmitExam();
+                }, 100);
+              }
+            }}
             className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm shadow-md shadow-indigo-600/30 transition flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"
           >
             <Send className="w-4 h-4" />
