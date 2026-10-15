@@ -807,9 +807,58 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
   const handleApplyJsonExam = () => {
     if (!jsonParsedExam) return;
+
+    // 1. Phân tích chính xác khối lớp từ mã đề hoặc thông tin tệp JSON
+    let resolvedGrade: any = 12;
+    const examCodeUpper = String(jsonParsedExam.code || '').toUpperCase();
+    if (examCodeUpper.startsWith('L10') || String((jsonParsedExam as any).gradeLevel).includes('10')) {
+      resolvedGrade = 10;
+    } else if (examCodeUpper.startsWith('L11') || String((jsonParsedExam as any).gradeLevel).includes('11')) {
+      resolvedGrade = 11;
+    } else if (examCodeUpper.startsWith('L12') || String((jsonParsedExam as any).gradeLevel).includes('12')) {
+      resolvedGrade = 12;
+    }
+
+    // 2. Chuẩn hóa gói đề hoàn chỉnh chứa trọn vẹn danh sách câu hỏi mới
+    const targetPackage: ExamPackage = {
+      id: jsonParsedExam.id || `pkg-${jsonParsedExam.code || Date.now()}`,
+      grade: resolvedGrade,
+      category: 'survey',
+      categoryLabel: 'Kiểm tra đánh giá năng lực',
+      chapterId: 'c1',
+      chapterTitle: jsonParsedExam.subtitle || `Chương trình Vật lí ${resolvedGrade} - GDPT 2018`,
+      code: (jsonParsedExam.code || `L${resolvedGrade}-${Date.now().toString().slice(-4)}`).trim().toUpperCase(),
+      title: jsonParsedExam.title || `Đề kiểm tra Vật lí ${resolvedGrade}`,
+      subtitle: jsonParsedExam.subtitle || '',
+      durationMinutes: jsonParsedExam.durationMinutes || 60,
+      totalPoints: jsonParsedExam.totalPoints || 10,
+      difficulty: 'Chuẩn Bộ GD&ĐT',
+      tags: ['GDPT 2018', `Vật lí ${resolvedGrade}`],
+      svgCount: 0,
+      katexCount: jsonParsedExam.questions.length,
+      examData: jsonParsedExam,
+      createdAt: new Date().toISOString().slice(0, 10),
+    };
+
+    // 3. Khóa dữ liệu đề mới vào bộ nhớ cục bộ (localStorage) để ngăn ứng dụng tự động nhảy về đề mặc định
+    try {
+      localStorage.setItem('physixam_current_exam', JSON.stringify(jsonParsedExam));
+    } catch (e) {}
+
+    // 4. Lưu trực tiếp đề vào Ngân hàng đề thi theo khối tương ứng
+    handleSavePackage(targetPackage);
+
+    // 5. Cập nhật đề hiện hành và mã đề cho toàn bộ ứng dụng
     onUpdateExam(jsonParsedExam);
-    if (jsonParsedExam.code) onSelectExamCode(jsonParsedExam.code);
-    showToast(`Đã áp dụng đề thi "${jsonParsedExam.title}" (${jsonParsedExam.questions.length} câu) thành công!`);
+    if (jsonParsedExam.code) {
+      onSelectExamCode(jsonParsedExam.code);
+    }
+
+    // 6. Điều hướng giao diện về Panel 1 để hiển thị ngay chi tiết các câu hỏi vừa nạp
+    setActivePanel('panel1');
+    setPanel1ViewMode('current_exam_questions');
+
+    showToast(`Đã áp dụng và lưu đề [${targetPackage.code}] thành công (${jsonParsedExam.questions.length} câu) vào Ngân hàng đề Khối ${resolvedGrade}!`);
   };
 
   return (
