@@ -479,24 +479,27 @@ export const CurriculumExamBank: React.FC<CurriculumExamBankProps> = ({
           ) : (
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
               {filteredPackages.map((pkg) => {
-                const isCurrentlyActive = Boolean(
-                  currentExam && pkg && (
-                    (currentExam.code && pkg.code && currentExam.code === pkg.code) ||
-                    (currentExam.id && pkg.examData?.id && currentExam.id === pkg.examData.id) ||
-                    (currentExam.code && pkg.examData?.code && currentExam.code === pkg.examData.code)
-                  )
-                );
-                const gradeColor = pkg.grade === 12
-                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                  : pkg.grade === 11
-                    ? 'bg-sky-50 text-sky-700 border-sky-200'
-                    : 'bg-teal-50 text-teal-700 border-teal-200';
+                // 1. Chỉ duy nhất đề có mã trùng khớp chính xác với đề hiện hành mới được sáng đèn
+    const curCode = String(currentExam?.code || '').trim().toUpperCase();
+    const pkgCode = String(pkg?.code || pkg?.examData?.code || '').trim().toUpperCase();
+    const isCurrentlyActive = Boolean(curCode && pkgCode && curCode === pkgCode);
 
-                const assignedInfo = assignments.find((a) => a.examId === pkg.id || a.examTitle === pkg.title);
+    const gradeColor = pkg.grade === 12
+      ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+      : pkg.grade === 11
+      ? 'bg-sky-50 text-sky-700 border-sky-200'
+      : 'bg-teal-50 text-teal-700 border-teal-200';
 
-                const p1Count = pkg.examData.questions.filter((q) => q.part === 'Phần I').length;
-                const p2Count = pkg.examData.questions.filter((q) => q.part === 'Phần II').length;
-                const p3Count = pkg.examData.questions.filter((q) => q.part === 'Phần III').length;
+    const assignedInfo = assignments.find((a) => a.examId === pkg.id || a.examTitle === pkg.title);
+
+    // 2. Trích xuất danh sách câu hỏi an toàn để đếm đúng số câu thực tế (kể cả đề 28 câu)
+    const rawQuestions: any[] = Array.isArray(pkg.examData?.questions) && pkg.examData.questions.length > 0
+      ? pkg.examData.questions
+      : (Array.isArray((pkg as any).questions) ? (pkg as any).questions : []);
+
+    const p1Count = rawQuestions.filter((q) => q?.part === 'Phần I' || q?.type === 'multiple_choice').length;
+    const p2Count = rawQuestions.filter((q) => q?.part === 'Phần II' || q?.type === 'true_false_cluster').length;
+    const p3Count = rawQuestions.filter((q) => q?.part === 'Phần III' || q?.type === 'short_answer').length;
 
                 return (
                   <div
