@@ -3,7 +3,7 @@ import { Exam, StudentAnswers, AntiCheatConfig, ViolationEvent } from '../types/
 import { MathRenderer } from './MathRenderer';
 import { 
   Clock, Send, Flag, Bookmark, CheckCircle2, ChevronLeft, ChevronRight, 
-  AlertTriangle, ShieldCheck, Maximize2 
+  AlertTriangle, ShieldCheck, Maximize2, Image as ImageIcon 
 } from 'lucide-react';
 
 interface StudentExamLaunchProps {
@@ -73,6 +73,90 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
     }
   };
 
+  // =========================================================================
+  // BỘ XỬ LÝ VÀ HIỂN THỊ HÌNH VẼ MINH HỌA THÔNG MINH (XỬ LÝ DỨT ĐIỂM LỖI MẤT HÌNH)
+  // =========================================================================
+  const renderQuestionIllustration = (q: any) => {
+    if (!q) return null;
+
+    // 1. Kiểm tra hình vẽ dạng đồ thị vector SVG
+    const svgData = q.diagram?.svgContent || q.diagram?.svg || (typeof q.diagram === 'string' && q.diagram.includes('<svg') ? q.diagram : null);
+    if (svgData) {
+      return (
+        <div className="my-5 p-3 bg-white border-2 border-indigo-100 rounded-3xl flex flex-col items-center justify-center max-w-2xl mx-auto shadow-sm">
+          <div 
+            className="w-full flex justify-center overflow-x-auto"
+            dangerouslySetInnerHTML={{ __html: svgData }}
+          />
+          {q.diagram?.caption && (
+            <span className="text-xs text-slate-500 font-medium italic mt-2 text-center">
+              {q.diagram.caption}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    // 2. Tìm nguồn ảnh đa năng (Hỗ trợ cả q.image, q.diagram, q.imageUrl)
+    let rawSrc: string | null = null;
+    let captionText: string = '';
+
+    // Ưu tiên A: Kiểm tra q.image (Cấu trúc file JSON chuẩn)
+    if (q.image) {
+      if (typeof q.image === 'string') {
+        rawSrc = q.image;
+      } else if (q.image.data) {
+        const mime = q.image.mime_type || 'image/png';
+        rawSrc = String(q.image.data).startsWith('data:')
+          ? q.image.data
+          : `data:${mime};base64,${q.image.data}`;
+        captionText = q.image.caption || '';
+      } else if (q.image.url || q.image.imageUrl) {
+        rawSrc = q.image.url || q.image.imageUrl;
+        captionText = q.image.caption || '';
+      }
+    }
+
+    // Ưu tiên B: Kiểm tra q.diagram
+    if (!rawSrc && q.diagram) {
+      if (typeof q.diagram === 'string') {
+        rawSrc = q.diagram;
+      } else {
+        rawSrc = q.diagram.imageUrl || q.diagram.data || q.diagram.url || null;
+        captionText = q.diagram.caption || '';
+      }
+    }
+
+    // Ưu tiên C: Kiểm tra q.imageUrl hoặc q.img
+    if (!rawSrc && q.imageUrl) rawSrc = q.imageUrl;
+    if (!rawSrc && q.img) rawSrc = q.img;
+
+    // Không có hình ảnh nào được khai báo
+    if (!rawSrc) return null;
+
+    // 3. Chuẩn hóa chuỗi Base64 tự động nếu thiếu tiền tố Data URI
+    let finalSrc = String(rawSrc).trim();
+    if (!finalSrc.startsWith('data:') && !finalSrc.startsWith('http://') && !finalSrc.startsWith('https://') && !finalSrc.startsWith('/')) {
+      finalSrc = `data:image/png;base64,${finalSrc}`;
+    }
+
+    return (
+      <div className="my-5 p-3 bg-white border-2 border-indigo-100 rounded-3xl flex flex-col items-center justify-center max-w-2xl mx-auto shadow-sm">
+        <img
+          src={finalSrc}
+          alt={captionText || 'Hình vẽ câu hỏi'}
+          className="max-h-80 sm:max-h-96 w-auto object-contain rounded-2xl shadow-2xs bg-white"
+          loading="eager"
+        />
+        {captionText && (
+          <span className="text-xs text-slate-500 font-semibold italic mt-2.5 text-center">
+            {captionText}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="w-full max-w-7xl mx-auto space-y-3">
       
@@ -114,12 +198,23 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
           </div>
 
           <button
-            type="button"
-            onClick={() => {
-              if (window.confirm('Em có chắc chắn muốn nộp bài thi ngay bây giờ không?')) {
-                onSubmitExam();
-              }
-            }}
+              type="button"
+              onClick={() => {
+                try {
+                  // Gỡ bỏ ngay các bộ chặn chuột/phím của Safari trước khi nộp
+                  if (typeof window !== 'undefined') {
+                    window.oncontextmenu = null;
+                    document.oncontextmenu = null;
+                    window.onkeydown = null;
+                    document.onkeydown = null;
+                    window.onblur = null;
+                  }
+                } catch (e) {}
+
+                if (window.confirm('Em có chắc chắn muốn nộp bài thi ngay bây giờ không?')) {
+                  onSubmitExam();
+                }
+              }}
             className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs sm:text-sm shadow-md shadow-indigo-600/30 transition flex items-center gap-1.5 cursor-pointer hover:scale-105 active:scale-95"
           >
             <Send className="w-4 h-4" />
@@ -164,26 +259,13 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
                 </button>
               </div>
 
-              {/* NỘI DUNG CÂU HỎI (FONT LỚN text-lg md:text-xl) */}
+              {/* NỘI DUNG CÂU HỎI (FONT CHỮ TO RÕ text-lg md:text-xl) */}
               <div className="text-lg md:text-xl font-bold text-slate-900 leading-relaxed space-y-3">
                 <MathRenderer content={currentQ.prompt || currentQ.stem || ''} />
               </div>
 
-              {/* HÌNH ẢNH MINH HỌA */}
-              {currentQ.diagram && (
-                <div className="my-4 p-2 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col items-center justify-center max-w-xl mx-auto">
-                  <img
-                    src={currentQ.diagram.imageUrl || currentQ.diagram.data}
-                    alt="Hình vẽ minh họa"
-                    className="max-h-72 w-auto object-contain rounded-xl shadow-2xs"
-                  />
-                  {currentQ.diagram.caption && (
-                    <span className="text-xs text-slate-500 font-medium italic mt-2">
-                      {currentQ.diagram.caption}
-                    </span>
-                  )}
-                </div>
-              )}
+              {/* KHU VỰC HIỂN THỊ HÌNH VẼ MINH HỌA (ĐÃ KHẮC PHỤC TRIỆT ĐỂ LỖI MẤT HÌNH) */}
+              {renderQuestionIllustration(currentQ)}
 
               {/* PHẦN I: TRẮC NGHIỆM 4 LỰA CHỌN */}
               {currentQ.type === 'multiple_choice' && Array.isArray(currentQ.options) && (
@@ -217,7 +299,7 @@ export const StudentExamLaunch: React.FC<StudentExamLaunchProps> = ({
                 </div>
               )}
 
-              {/* PHẦN II: TRẮC NGHIỆM ĐÚNG / SAI CHÙM Ý */}
+              {/* PHẦN II: TRẮC NGHIỆM ĐÚNG / SAI THEO CHÙM Ý */}
               {currentQ.type === 'true_false_cluster' && Array.isArray(currentQ.items) && (
                 <div className="space-y-3 pt-2">
                   {currentQ.items.map((item: any, sIdx: number) => {

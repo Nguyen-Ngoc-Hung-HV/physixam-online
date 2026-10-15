@@ -625,11 +625,20 @@ export default function App() {
     }));
   };
 
-  // =========================================================================
-  // XỬ LÝ NỘP BÀI: TỐI ƯU HÓA HOÀN TOÀN CHO SAFARI & CHROME
+// =========================================================================
+  // XỬ LÝ NỘP BÀI: CÔ LẬP TOÀN BỘ WEB-KIT ĐỂ CHỐNG SẬP TRÌNH DUYỆT SAFARI
   // =========================================================================
   const handleSubmitExam = () => {
-    // 1. Chấm điểm chính xác & an toàn
+    // 1. Dọn dẹp ép buộc các bộ lắng nghe chặn chuột và phím của Safari
+    try {
+      if (typeof window !== 'undefined') {
+        window.oncontextmenu = null;
+        window.onkeydown = null;
+        window.onblur = null;
+      }
+    } catch (e) {}
+
+    // 2. Chấm điểm an toàn, chuẩn hóa tất cả các trường dữ liệu
     let score = 0;
     const detailedFeedback: any[] = [];
     const questionsList = (exam && Array.isArray(exam.questions)) ? exam.questions : (DEFAULT_EXAM.questions || []);
@@ -694,7 +703,7 @@ export default function App() {
       totalScore: finalScore,
       score: finalScore,
       maxScore: 10,
-      percentage: percentage,
+      percentage: isNaN(percentage) ? 0 : percentage,
       correctCount: correctCount,
       totalQuestions: totalCount,
       detailedFeedback,
@@ -711,13 +720,13 @@ export default function App() {
       id: `sub-${Date.now()}`,
       studentName: candidateInfo.name || 'Thí sinh tự do',
       candidateName: candidateInfo.name || 'Thí sinh tự do',
-      studentClass: candidateInfo.studentClass || '11A',
+      studentClass: candidateInfo.studentClass || '11',
       candidateNumber: candidateInfo.candidateNumber || 'SBD-001',
       examCode: safeExamCode,
       totalScore: finalScore,
       score: finalScore,
-      percentage: percentage,
-      submittedAt: new Date().toLocaleString('vi-VN'),
+      percentage: isNaN(percentage) ? 0 : percentage,
+      submittedAt: new Date().toLocaleTimeString('vi-VN') + ' ' + new Date().toLocaleDateString('vi-VN'),
       timeSpentSeconds: Math.max(0, ((exam?.durationMinutes || 45) * 60) - timeRemainingSeconds),
       submissionReason: 'normal',
       violationCount: auditLog.violations.length,
@@ -726,7 +735,7 @@ export default function App() {
       evaluation: evalResult
     } as any;
 
-    // Gán kết quả vào state trước
+    // Gán dữ liệu đánh giá trước
     setEvaluation(evalResult);
 
     // Cập nhật bộ nhớ cục bộ
@@ -742,35 +751,38 @@ export default function App() {
       return updated;
     });
 
-    // 2. Chuyển sang màn hình kết quả ngay lập tức
-    setStudentExamPhase('student_results');
-
-    // 3. Hoãn các thao tác WebKit/DOM để Safari render xong khung hình
-    setTimeout(() => {
+    // 3. Thoát Fullscreen an toàn và cho nhịp nghỉ trước khi đổi giao diện (tránh sập Safari)
+    const safelyExitFsAndProceed = () => {
       try {
-        if (typeof document !== 'undefined') {
-          const isFs = document.fullscreenElement || (document as any).webkitFullscreenElement;
-          if (isFs) {
-            if (document.exitFullscreen) {
-              document.exitFullscreen().catch(() => {});
-            } else if ((document as any).webkitExitFullscreen) {
-              (document as any).webkitExitFullscreen();
+        const doc: any = document;
+        if (doc && (doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement)) {
+          const exit = doc.exitFullscreen || doc.webkitExitFullscreen || doc.mozCancelFullScreen || doc.msExitFullscreen;
+          if (exit) {
+            const p = exit.call(doc);
+            if (p && typeof p.catch === 'function') {
+              p.catch(() => {});
             }
           }
         }
-      } catch (e) {}
-
-      // Gửi dữ liệu nền lên MongoDB
-      try {
-        fetch('/api/submissions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(newSub)
-        }).then(() => {
-          fetchAllDataFromMongo();
-        }).catch((err) => console.warn('Lỗi ghi MongoDB ngầm:', err));
       } catch (err) {}
-    }, 50);
+
+      setTimeout(() => {
+        setStudentExamPhase('student_results');
+
+        // Gửi ngầm dữ liệu lên MongoDB
+        try {
+          fetch('/api/submissions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newSub)
+          }).then(() => {
+            fetchAllDataFromMongo();
+          }).catch(() => {});
+        } catch (netErr) {}
+      }, 100);
+    };
+
+    safelyExitFsAndProceed();
   };
 
   const handleDeleteSubmission = async (submissionId: string) => {
