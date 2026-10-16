@@ -23,14 +23,14 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   currentExam,
   antiCheatConfig
 }) => {
-  // Ưu tiên số 1: Lấy đề thi đang soạn/nạp trong currentExam
+  // 1. Trích xuất đề thi hiệu lực
   const effectiveExam: Exam = (currentExam && Array.isArray(currentExam.questions) && currentExam.questions.length > 0)
     ? currentExam
     : (examPackage && examPackage.examData && Array.isArray(examPackage.examData.questions) && examPackage.examData.questions.length > 0)
       ? examPackage.examData
       : (examPackage as any);
 
-  // Xác định Khối lớp chính xác
+  // 2. Xác định Khối lớp
   let rawGradeNum = 12;
   if (effectiveExam?.gradeLevel) {
     rawGradeNum = parseInt(String(effectiveExam.gradeLevel).replace(/\D/g, ''), 10) || 12;
@@ -41,7 +41,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   }
   const effectiveGrade = (rawGradeNum as unknown) as GradeLevel;
 
-  // Tự động sinh danh sách lớp theo khối tương ứng
+  // Tự động đồng bộ danh sách lớp theo khối
   const availableClasses = useMemo(() => {
     const g = Number(rawGradeNum) || 12;
     return [`Lớp ${g}A1`, `Lớp ${g}A2`, `Lớp ${g} Lý`, `Lớp ${g} Hóa`, `Lớp ${g} Chuyên`];
@@ -57,16 +57,16 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
 
   const [distributionMode, setDistributionMode] = useState<'shuffled' | 'original'>('original');
 
-  // Đồng bộ số lần vi phạm từ cấu hình giám sát của Giáo viên (nếu có)
+  // ĐỒNG BỘ CHUẨN XÁC SỐ LẦN VI PHẠM TỪ CẤU HÌNH TAB 3.2
   const [maxViolations, setMaxViolations] = useState<number>(() => {
-    return antiCheatConfig?.maxViolations || 3;
+    return antiCheatConfig?.maxViolations !== undefined ? antiCheatConfig.maxViolations : 3;
   });
 
   useEffect(() => {
-    if (antiCheatConfig?.maxViolations) {
+    if (antiCheatConfig?.maxViolations !== undefined) {
       setMaxViolations(antiCheatConfig.maxViolations);
     }
-  }, [antiCheatConfig]);
+  }, [antiCheatConfig, antiCheatConfig?.maxViolations]);
 
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const [isCopiedCode, setIsCopiedCode] = useState<boolean>(false);
@@ -74,21 +74,23 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isSynced, setIsSynced] = useState<boolean>(false);
 
-  // Mã rút gọn đồng bộ tuyệt đối giữa đề và lượt giao
-  const shortCode = effectiveExam?.code || examPackage?.code || 'L12B1.3';
-  const examTitle = effectiveExam?.title || examPackage?.title || 'Đề thi Khảo thí Vật lí';
+  // Mã rút gọn đồng bộ
+  const shortCode = String(effectiveExam?.code || examPackage?.code || 'L12B1.3').trim().toUpperCase();
+
+  // Khử lặp từ tiêu đề "ĐỀ THI VẬT LÍ: ĐỀ THI VẬT LÍ:..."
+  const rawTitle = effectiveExam?.title || examPackage?.title || 'Đề khảo thí Vật lí';
+  const cleanTitle = rawTitle.replace(/^(ĐỀ\s*THI\s*VẬT\s*L[ÍI]\s*[:\-]\s*)+/gi, '').trim();
+
   const durationMin = effectiveExam?.durationMinutes || (examPackage as any)?.durationMinutes || 45;
   const totalQuestionsCount = effectiveExam?.questions?.length || (examPackage as any)?.total_questions || 28;
 
-  // Đường link trực tiếp cho học sinh làm bài
   const shareUrl = typeof window !== 'undefined' 
     ? `${window.location.origin}/?code=${encodeURIComponent(shortCode)}` 
     : `https://physixam-online.vercel.app/?code=${encodeURIComponent(shortCode)}`;
 
-  // Mã QR chất lượng cao
   const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${encodeURIComponent(shareUrl)}&margin=10`;
 
-  // TỰ ĐỘNG ĐẨY ĐÚNG ĐỀ HIỆN TẠI LÊN MONGODB ATLAS
+  // Tự động đồng bộ lên MongoDB
   useEffect(() => {
     if (!isOpen) return;
 
@@ -101,8 +103,8 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
           accessCode: shortCode,
           examCode: shortCode,
           examId: examPackage?.id || `pkg-${shortCode}`,
-          title: examTitle,
-          examTitle: examTitle,
+          title: cleanTitle,
+          examTitle: cleanTitle,
           className: selectedClass,
           grade: effectiveGrade,
           durationMinutes: durationMin,
@@ -130,7 +132,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
     };
 
     syncToDatabase();
-  }, [isOpen, shortCode, examTitle, effectiveExam, selectedClass, effectiveGrade, durationMin, examPackage]);
+  }, [isOpen, shortCode, cleanTitle, effectiveExam, selectedClass, effectiveGrade, durationMin, examPackage]);
 
   if (!isOpen || !examPackage) return null;
 
@@ -147,7 +149,6 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   };
 
   const handleConfirm = (switchToStudent: boolean) => {
-    // Kế thừa trung thực cấu hình giám sát từ Tab 3.2, tránh xung đột cưỡng chế
     const isAntiCheatOn = antiCheatConfig?.enabled ?? true;
     const isReqFullscreen = antiCheatConfig ? antiCheatConfig.requireFullscreen : true;
     const isPreventCopy = antiCheatConfig ? antiCheatConfig.preventCopyAndShortcuts : true;
@@ -155,7 +156,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
     const newAssignment: ExamAssignmentInfo = {
       id: `assign-${Date.now()}`,
       examId: examPackage.id || `pkg-${shortCode}`,
-      examTitle: examTitle,
+      examTitle: cleanTitle,
       examCode: shortCode,
       accessCode: shortCode,
       grade: effectiveGrade,
@@ -176,7 +177,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
       ...examPackage,
       id: examPackage.id || `pkg-${shortCode}`,
       code: shortCode,
-      title: examTitle,
+      title: cleanTitle,
       grade: effectiveGrade,
       examData: effectiveExam
     };
@@ -188,14 +189,14 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
       <div className="bg-white rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl border border-slate-200 my-8">
         
-        {/* Header Modal */}
+        {/* Header Modal - Đã dọn dẹp không bị lặp chữ */}
         <div className="p-6 bg-gradient-to-r from-indigo-700 via-indigo-600 to-violet-700 text-white flex items-start justify-between">
           <div className="space-y-1">
             <span className="text-3xs uppercase tracking-widest font-mono text-indigo-200 block">
               GIAO BÀI THI CHO HỌC SINH • KHỐI {String(effectiveGrade)} – MÃ {shortCode}
             </span>
             <h3 className="text-xl font-black text-white leading-snug line-clamp-2">
-              ĐỀ THI VẬT LÍ: {examTitle}
+              {cleanTitle}
             </h3>
             <p className="text-xs text-indigo-100 flex items-center gap-2 pt-0.5">
               <span>Thời lượng: {durationMin} phút</span>
@@ -274,15 +275,17 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
             </p>
           </div>
 
-          {/* Giám sát thi trực tuyến */}
+          {/* Giám sát thi trực tuyến - ĐÃ ĐỒNG BỘ HOÀN TOÀN TỪ TAB 3.2 */}
           <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
                 <span>Giám sát thi trực tuyến (Anti-cheat)</span>
               </span>
-              <span className="text-3xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
-                {antiCheatConfig?.enabled !== false ? 'Đã kích hoạt' : 'Đang tắt'}
+              <span className={`text-3xs font-bold px-2 py-0.5 rounded ${
+                antiCheatConfig?.enabled !== false ? 'text-emerald-700 bg-emerald-100' : 'text-slate-600 bg-slate-200'
+              }`}>
+                {antiCheatConfig?.enabled !== false ? 'Đang kích hoạt' : 'Đang tạm tắt'}
               </span>
             </div>
             <div className="flex items-center justify-between text-xs pt-1">
@@ -290,12 +293,13 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
               <select
                 value={maxViolations}
                 onChange={(e) => setMaxViolations(Number(e.target.value))}
-                className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold outline-none"
+                className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold outline-none text-slate-800"
               >
-                <option value={1}>1 lần (Khắt khe)</option>
+                <option value={1}>1 lần (Khóa ngay khi rời tab)</option>
                 <option value={2}>2 lần (Nghiêm ngặt)</option>
                 <option value={3}>3 lần (Tiêu chuẩn)</option>
-                <option value={5}>5 lần (Linh hoạt)</option>
+                <option value={5}>5 lần (Luyện tập tự do)</option>
+                <option value={10}>10 lần</option>
               </select>
             </div>
           </div>
@@ -370,7 +374,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
 
         </div>
 
-        {/* Nút thao tác dưới cùng */}
+        {/* Nút thao tác */}
         <div className="p-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
           <button
             type="button"

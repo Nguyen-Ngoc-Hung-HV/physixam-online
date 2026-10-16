@@ -366,13 +366,37 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   };
 
   const handleSelectPackageAsActive = (pkg: ExamPackage) => {
+    if (!pkg) return;
+
+    const safeCode = String(pkg.code || '101').trim();
+    const rawExam = (pkg.examData || pkg) as any;
+    const actualQuestions = Array.isArray(rawExam.questions) && rawExam.questions.length > 0
+      ? rawExam.questions
+      : (Array.isArray((pkg as any).questions) ? (pkg as any).questions : []);
+
+    const fullExamData: Exam = {
+      ...(rawExam || {}),
+      id: pkg.id || `exam-${safeCode}`,
+      code: safeCode,
+      title: pkg.title || rawExam.title || 'Đề kiểm tra Vật lí',
+      subtitle: pkg.subtitle || rawExam.subtitle || '',
+      durationMinutes: Number(pkg.durationMinutes || rawExam.durationMinutes || 45),
+      totalPoints: Number(pkg.totalPoints || rawExam.totalPoints || 10),
+      questions: actualQuestions.length > 0 ? actualQuestions : (rawExam.questions || []),
+    };
+
+    try {
+      localStorage.setItem('physixam_current_exam', JSON.stringify(fullExamData));
+      localStorage.setItem('physixam_active_code', safeCode);
+    } catch (e) {}
+
     if (onSelectExamPackage) {
-      onSelectExamPackage(pkg);
-    } else {
-      onUpdateExam(pkg.examData);
+      onSelectExamPackage({ ...pkg, examData: fullExamData });
     }
-    onSelectExamCode(pkg.code);
-    showToast(`Đã nạp đề thi [Mã: ${pkg.code}] "${pkg.title}" vào hệ thống khảo thí!`);
+    onUpdateExam(fullExamData);
+    onSelectExamCode(safeCode);
+
+    showToast(`Đã nạp đề [${safeCode}] (${fullExamData.questions.length} câu) vào hệ thống khảo thí!`);
   };
 
   const handleBankAssignExam = async (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
@@ -2037,6 +2061,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           onClose={() => setAssigningPackage(null)}
           examPackage={assigningPackage}
           currentExam={safeExam}
+          antiCheatConfig={antiCheatConfig}
           onAssign={handleConfirmAssignment}
         />
       )}
