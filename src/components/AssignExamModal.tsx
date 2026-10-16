@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ExamPackage, ExamAssignmentInfo, GradeLevel } from '../types/curriculum';
-import { Exam } from '../types/exam';
+import { Exam, AntiCheatConfig } from '../types/exam';
 import { 
   Send, X, Copy, Check, QrCode, ShieldCheck, 
   Calendar, Clock, Users, ArrowRight, Sparkles, CheckCircle2, Loader2
@@ -12,26 +12,17 @@ interface AssignExamModalProps {
   examPackage: ExamPackage;
   onAssign: (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => void;
   currentExam?: Exam;
+  antiCheatConfig?: AntiCheatConfig;
 }
-
-const AVAILABLE_CLASSES = ['Lớp 12A1', 'Lớp 12A2', 'Lớp 12 Lý', 'Lớp 12 Hóa', 'Lớp 12 Chuyên'];
 
 export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   isOpen,
   onClose,
   examPackage,
   onAssign,
-  currentExam
+  currentExam,
+  antiCheatConfig
 }) => {
-  const [selectedClass, setSelectedClass] = useState<string>('Lớp 12A1');
-  const [distributionMode, setDistributionMode] = useState<'shuffled' | 'original'>('original');
-  const [maxViolations, setMaxViolations] = useState<number>(3);
-  const [isCopied, setIsCopied] = useState<boolean>(false);
-  const [isCopiedCode, setIsCopiedCode] = useState<boolean>(false);
-  const [showQr, setShowQr] = useState<boolean>(true);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [isSynced, setIsSynced] = useState<boolean>(false);
-
   // Ưu tiên số 1: Lấy đề thi đang soạn/nạp trong currentExam
   const effectiveExam: Exam = (currentExam && Array.isArray(currentExam.questions) && currentExam.questions.length > 0)
     ? currentExam
@@ -39,11 +30,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
       ? examPackage.examData
       : (examPackage as any);
 
-  // Mã rút gọn đồng bộ tuyệt đối giữa đề và lượt giao
-  const shortCode = effectiveExam?.code || examPackage?.code || 'L12B1.3';
-  const examTitle = effectiveExam?.title || examPackage?.title || 'Đề thi Khảo thí Vật lí';
-  
-  // Xác định Khối lớp và ép kiểu GradeLevel an toàn để không bị báo lỗi TypeScript
+  // Xác định Khối lớp chính xác
   let rawGradeNum = 12;
   if (effectiveExam?.gradeLevel) {
     rawGradeNum = parseInt(String(effectiveExam.gradeLevel).replace(/\D/g, ''), 10) || 12;
@@ -54,8 +41,43 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   }
   const effectiveGrade = (rawGradeNum as unknown) as GradeLevel;
 
+  // Tự động sinh danh sách lớp theo khối tương ứng
+  const availableClasses = useMemo(() => {
+    const g = Number(rawGradeNum) || 12;
+    return [`Lớp ${g}A1`, `Lớp ${g}A2`, `Lớp ${g} Lý`, `Lớp ${g} Hóa`, `Lớp ${g} Chuyên`];
+  }, [rawGradeNum]);
+
+  const [selectedClass, setSelectedClass] = useState<string>(() => availableClasses[0]);
+
+  useEffect(() => {
+    if (availableClasses.length > 0) {
+      setSelectedClass(availableClasses[0]);
+    }
+  }, [availableClasses]);
+
+  const [distributionMode, setDistributionMode] = useState<'shuffled' | 'original'>('original');
+
+  // Đồng bộ số lần vi phạm từ cấu hình giám sát của Giáo viên (nếu có)
+  const [maxViolations, setMaxViolations] = useState<number>(() => {
+    return antiCheatConfig?.maxViolations || 3;
+  });
+
+  useEffect(() => {
+    if (antiCheatConfig?.maxViolations) {
+      setMaxViolations(antiCheatConfig.maxViolations);
+    }
+  }, [antiCheatConfig]);
+
+  const [isCopied, setIsCopied] = useState<boolean>(false);
+  const [isCopiedCode, setIsCopiedCode] = useState<boolean>(false);
+  const [showQr, setShowQr] = useState<boolean>(true);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isSynced, setIsSynced] = useState<boolean>(false);
+
+  // Mã rút gọn đồng bộ tuyệt đối giữa đề và lượt giao
+  const shortCode = effectiveExam?.code || examPackage?.code || 'L12B1.3';
+  const examTitle = effectiveExam?.title || examPackage?.title || 'Đề thi Khảo thí Vật lí';
   const durationMin = effectiveExam?.durationMinutes || (examPackage as any)?.durationMinutes || 45;
-  // Sửa lỗi: Lấy an toàn số lượng câu hỏi mà không phụ thuộc vào thuộc tính cố định
   const totalQuestionsCount = effectiveExam?.questions?.length || (examPackage as any)?.total_questions || 28;
 
   // Đường link trực tiếp cho học sinh làm bài
@@ -125,6 +147,11 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
   };
 
   const handleConfirm = (switchToStudent: boolean) => {
+    // Kế thừa trung thực cấu hình giám sát từ Tab 3.2, tránh xung đột cưỡng chế
+    const isAntiCheatOn = antiCheatConfig?.enabled ?? true;
+    const isReqFullscreen = antiCheatConfig ? antiCheatConfig.requireFullscreen : true;
+    const isPreventCopy = antiCheatConfig ? antiCheatConfig.preventCopyAndShortcuts : true;
+
     const newAssignment: ExamAssignmentInfo = {
       id: `assign-${Date.now()}`,
       examId: examPackage.id || `pkg-${shortCode}`,
@@ -137,10 +164,10 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
       openTime: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
       deadline: 'Không thời hạn',
       status: 'active',
-      antiCheatEnabled: true,
+      antiCheatEnabled: isAntiCheatOn,
       maxViolations: maxViolations,
-      preventCopyAndShortcuts: true,
-      requireFullscreen: true,
+      preventCopyAndShortcuts: isPreventCopy,
+      requireFullscreen: isReqFullscreen,
       shuffleQuestions: distributionMode === 'shuffled',
       examData: effectiveExam
     } as any;
@@ -196,7 +223,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
               <span>Lớp nhận bài kiểm tra:</span>
             </label>
             <div className="flex flex-wrap gap-2">
-              {AVAILABLE_CLASSES.map((cls) => (
+              {availableClasses.map((cls) => (
                 <button
                   key={cls}
                   type="button"
@@ -255,7 +282,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
                 <span>Giám sát thi trực tuyến (Anti-cheat)</span>
               </span>
               <span className="text-3xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">
-                Đã kích hoạt
+                {antiCheatConfig?.enabled !== false ? 'Đã kích hoạt' : 'Đang tắt'}
               </span>
             </div>
             <div className="flex items-center justify-between text-xs pt-1">
@@ -265,6 +292,7 @@ export const AssignExamModal: React.FC<AssignExamModalProps> = ({
                 onChange={(e) => setMaxViolations(Number(e.target.value))}
                 className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold outline-none"
               >
+                <option value={1}>1 lần (Khắt khe)</option>
                 <option value={2}>2 lần (Nghiêm ngặt)</option>
                 <option value={3}>3 lần (Tiêu chuẩn)</option>
                 <option value={5}>5 lần (Linh hoạt)</option>
