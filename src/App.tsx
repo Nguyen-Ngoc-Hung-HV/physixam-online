@@ -1,1234 +1,785 @@
-import React, { useState, useEffect, useRef, Component, ErrorInfo, ReactNode } from 'react';
-import { Exam, StudentAnswers, AntiCheatConfig, ViolationEvent, StudentSubmission, ExamVariantBundle } from './types/exam';
-import { StudentExamLaunch } from './components/StudentExamLaunch';
-import { ExamResults, PrintMode } from './components/ExamResults';
-import { TeacherDashboard } from './components/TeacherDashboard';
-import { safeStorage } from './utils/safeStorage';
-import { ExamPackage, ExamAssignmentInfo } from './types/curriculum';
-import { 
-  Home, LayoutDashboard, GraduationCap, Code, Copy, Check, X, 
-  Printer, ArrowLeft, Image as ImageIcon, Sparkles, RefreshCw, 
-  UploadCloud, ArrowRight, BookOpen, ShieldCheck, Atom, CheckCircle2,
-  Lock, KeyRound, AlertCircle, Megaphone, Loader2, UserCheck, Maximize2
-} from 'lucide-react';
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-// =========================================================================
-// LỚP BẢO VỆ CHỐNG TRẮNG TRANG CHO SAFARI (REACT ERROR BOUNDARY)
-// =========================================================================
-interface ErrorBoundaryProps {
-  children: ReactNode;
-  evaluation: any;
-  candidateInfo: any;
-  exam: any;
-  onRetake: () => void;
-  onOpenTeacherMode: () => void;
-}
+import React, { useCallback, useEffect, useState } from 'react';
+import { Moon, Sun } from 'lucide-react';
+import {
+  ExamData,
+  OnlineExamAssignment,
+  SavedExamSession,
+  ScrambledExamVariant,
+  WorkstationNode,
+} from './types/exam';
+import {
+  FULL_MOET_28_PHYSICS_EXAM,
+  INITIAL_WORKSTATION_NODES,
+} from './data/seedPhysicsExam';
+import {
+  countCompletedQuestions,
+  generateMultipleVariants,
+} from './utils/scramblerAndGrader';
+import { LandingPage } from './components/LandingPage';
+import { TeacherPortal } from './components/TeacherPortal';
+import { StudentExamEnvironment } from './components/StudentExamEnvironment';
+import { StatisticsPortal } from './components/StatisticsPortal';
+import {
+  fetchSubmissionsByExam,
+  importExamToCloud,
+  submitExamToCloud,
+  syncOnlineAssignmentToCloud,
+} from './services/api';
 
-interface ErrorBoundaryState {
-  hasError: boolean;
-  error: any;
-}
-
-class ResultsErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-
-  static getDerivedStateFromError(error: any): ErrorBoundaryState {
-    return { hasError: true, error };
-  }
-
-  componentDidCatch(error: any, errorInfo: ErrorInfo) {
-    console.warn('Bảo vệ Safari: Bắt lỗi an toàn khi nộp bài:', error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      const { evaluation, candidateInfo, exam, onRetake, onOpenTeacherMode } = this.props;
-      const displayScore = Number(evaluation?.totalScore ?? evaluation?.score ?? 0).toFixed(2);
-      const correct = evaluation?.correctCount || 0;
-      const total = evaluation?.totalQuestions || exam?.questions?.length || 0;
-
-      return (
-        <div className="max-w-2xl mx-auto my-8 p-6 sm:p-8 bg-white rounded-3xl shadow-xl border border-slate-200 text-center space-y-6">
-          <div className="w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
-            <CheckCircle2 className="w-10 h-10" />
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-2xl font-black text-slate-900">Bài Thi Đã Nộp Thành Công!</h2>
-            <p className="text-xs text-slate-500 font-medium">{exam?.title}</p>
-          </div>
-
-          <div className="p-4 rounded-2xl bg-indigo-50/60 border border-indigo-100 text-left space-y-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-slate-600">Thí sinh:</span>
-              <strong className="text-slate-900">{candidateInfo?.name || 'Thí sinh'}</strong>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-600">Lớp:</span>
-              <strong className="text-slate-900">{candidateInfo?.studentClass || '11'}</strong>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-600">Số báo danh:</span>
-              <strong className="font-mono text-slate-900">{candidateInfo?.candidateNumber || 'SBD-001'}</strong>
-            </div>
-          </div>
-
-          <div className="p-6 rounded-3xl bg-gradient-to-tr from-emerald-600 to-teal-700 text-white shadow-lg space-y-1">
-            <div className="text-3xs uppercase tracking-widest text-emerald-200 font-bold">Điểm tổng kết</div>
-            <div className="text-5xl font-black">
-              {displayScore}
-              <span className="text-xl font-normal text-emerald-200"> / 10đ</span>
-            </div>
-            <div className="text-xs text-emerald-100 font-medium pt-1">
-              Đúng {correct} / {total} câu
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 justify-center pt-2">
-            <button
-              type="button"
-              onClick={onRetake}
-              className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition"
-            >
-              Làm lại bài thi
-            </button>
-            <button
-              type="button"
-              onClick={onOpenTeacherMode}
-              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs cursor-pointer shadow-md transition"
-            >
-              Về Bảng điều khiển Giáo viên
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-const DEFAULT_EXAM: Exam = {
-  id: 'exam-101',
-  code: '101',
-  title: 'Khảo thí Vật lí - Đề kiểm tra chuẩn',
-  durationMinutes: 45,
-  totalPoints: 10,
-  questions: [
-    {
-      id: 'q-demo-1',
-      code: 'C01',
-      type: 'multiple_choice',
-      prompt: 'Một vật chuyển động thẳng đều với vận tốc $v = 5\\text{ m/s}$. Quãng đường vật đi được trong thời gian $t = 4\\text{ s}$ là',
-      options: [
-        { id: 'opt-A', label: 'A', text: '$20\\text{ m}$' },
-        { id: 'opt-B', label: 'B', text: '$10\\text{ m}$' },
-        { id: 'opt-C', label: 'C', text: '$15\\text{ m}$' },
-        { id: 'opt-D', label: 'D', text: '$25\\text{ m}$' }
-      ],
-      correctAnswer: 'opt-A',
-      explanation: 'Áp dụng công thức $s = v \\cdot t = 5 \\cdot 4 = 20\\text{ m}$.',
-      points: 2.5
-    }
-  ]
-} as any;
-
-const PRESET_BANNERS = [
-  {
-    name: 'Sóng & Lượng tử Xanh Chàm',
-    url: 'https://images.unsplash.com/photo-1507413245164-6160d8298b31?q=80&w=2070&auto=format&fit=crop'
-  },
-  {
-    name: 'Vũ trụ & Hạt cơ bản',
-    url: 'https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2072&auto=format&fit=crop'
-  }
-];
-
-const DEFAULT_BRANDING = {
-  schoolName: 'TRƯỜNG THPT HÙNG VƯƠNG',
-  subtitle: 'HỆ THỐNG KHẢO THÍ VẬT LÍ TRỰC TUYẾN • CHƯƠNG TRÌNH GDPT 2018',
-  tickerText: '⚡ CHÀO MỪNG QUÝ THẦY CÔ VÀ CÁC EM HỌC SINH! • "Học để hiểu bản chất của tự nhiên — Thi để khẳng định tư duy khoa học" • Hệ thống khảo thí Vật lí trực tuyến chuẩn cấu trúc GDPT 2018',
-  logoUrl: '',
-  bannerUrl: PRESET_BANNERS[0].url
-};
-
-const DEFAULT_TEACHER_PIN = '123456';
+const THEME_STORAGE_KEY = 'smarttest_gdpt2018_theme';
+const ONLINE_ASSIGNMENTS_STORAGE_KEY = 'smarttest_gdpt2018_online_assignments_v1';
 
 export default function App() {
-  const [appMode, setAppMode] = useState<'home' | 'student' | 'teacher' | 'print'>(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('mode') === 'student' || params.get('role') === 'student' || params.get('exam') || params.get('code') || params.get('assign')) {
-        return 'student';
-      }
-    }
-    return 'home';
-  });
-
-  const [activePrintMode, setActivePrintMode] = useState<'exam_only' | 'exam_with_solutions' | 'matrix'>('exam_only');
-  const [isLoadingAssignedExam, setIsLoadingAssignedExam] = useState<boolean>(false);
-
-  const [isTeacherAuthenticated, setIsTeacherAuthenticated] = useState<boolean>(() => {
+  // Dual-Theme Switcher: 'dark' ("Tím Than") | 'light' ("Nền Trắng")
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     try {
-      return sessionStorage.getItem('physixam_teacher_auth') === 'true';
+      const saved = localStorage.getItem(THEME_STORAGE_KEY);
+      if (saved === 'light' || saved === 'dark') return saved;
     } catch {
-      return false;
+      // Fallback to dark
     }
+    return 'dark';
   });
-  const [isPinModalOpen, setIsPinModalOpen] = useState<boolean>(false);
-  const [enteredPin, setEnteredPin] = useState<string>('');
-  const [pinError, setPinError] = useState<string | null>(null);
-
-  const [branding, setBranding] = useState(() => {
-    try {
-      const saved = localStorage.getItem('physixam_branding');
-      return saved ? { ...DEFAULT_BRANDING, ...JSON.parse(saved) } : DEFAULT_BRANDING;
-    } catch (e) {
-      return DEFAULT_BRANDING;
-    }
-  });
-
-  const [isBrandingModalOpen, setIsBrandingModalOpen] = useState(false);
-  const [brandingDraft, setBrandingDraft] = useState(branding);
-
-  const [exam, setExam] = useState<Exam>(() => {
-    try {
-      const saved = safeStorage?.getItem ? safeStorage.getItem('physixam_current_exam') : localStorage.getItem('physixam_current_exam');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-          return parsed;
-        }
-      }
-    } catch (e) {}
-    return DEFAULT_EXAM;
-  });
-
-  const [bundle, setBundle] = useState<ExamVariantBundle | null>(() => {
-    try {
-      const saved = safeStorage?.getItem ? safeStorage.getItem('physixam_bundle') : localStorage.getItem('physixam_bundle');
-      return saved ? JSON.parse(saved) : null;
-    } catch (e) {
-      return null;
-    }
-  });
-
-  const [activeCode, setActiveCode] = useState<string>(() => exam?.code || '101');
-
-  const availableCodes: string[] = React.useMemo(() => {
-    if (bundle && Array.isArray(bundle.variants) && bundle.variants.length > 0) {
-      const codes = bundle.variants
-        .map((v: any) => v?.code)
-        .filter((c: any): c is string => typeof c === 'string' && c.trim().length > 0);
-      if (codes.length > 0) return codes;
-    }
-    return [activeCode || exam?.code || '101'];
-  }, [bundle, exam?.code, activeCode]);
-
-  const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
-    try {
-      const saved = safeStorage?.getItem ? safeStorage.getItem('physixam_submissions') : localStorage.getItem('physixam_submissions');
-      return saved ? JSON.parse(saved) : [];
-    } catch (e) {
-      return [];
-    }
-  });
-
-  const [assignments, setAssignments] = useState<ExamAssignmentInfo[]>(() => {
-    try {
-      const saved = localStorage.getItem('physixam_assignments');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      return [];
-    }
-  });
-
-  const [isJsonModalOpen, setIsJsonModalOpen] = useState<boolean>(false);
-  const [jsonText, setJsonText] = useState<string>('');
-  const [jsonCopied, setJsonCopied] = useState<boolean>(false);
-  const [jsonError, setJsonError] = useState<string | null>(null);
-
-  const [studentExamPhase, setStudentExamPhase] = useState<'launch' | 'student_results'>('launch');
-  const [answers, setAnswers] = useState<StudentAnswers>(() => ({}));
-  const [flaggedQuestionIds, setFlaggedQuestionIds] = useState<Set<string>>(new Set());
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
-  const [timeRemainingSeconds, setTimeRemainingSeconds] = useState<number>(45 * 60);
-  const [evaluation, setEvaluation] = useState<any>(null);
-
-  const [candidateInfo, setCandidateInfo] = useState({
-    name: '',
-    studentClass: '',
-    candidateNumber: ''
-  });
-  const [isRegistered, setIsRegistered] = useState<boolean>(false);
-
-  const [auditLog, setAuditLog] = useState<{ violations: ViolationEvent[] }>({ violations: [] });
-  const [antiCheatConfig, setAntiCheatConfig] = useState<AntiCheatConfig>({
-    enabled: true,
-    maxViolations: 5
-  } as any);
-
-  // =========================================================================
-  // ĐỒNG BỘ TOÀN DIỆN TỪ MONGODB ATLAS: SUBMISSIONS & ASSIGNMENTS
-  // =========================================================================
-  const fetchAllDataFromMongo = async () => {
-    // 1. Tải toàn bộ danh sách bài nộp từ MongoDB Atlas (loại bỏ 3 bài mẫu mặc định)
-    try {
-      const resSub = await fetch(`/api/submissions?t=${Date.now()}`);
-      if (resSub.ok) {
-        const cloudData = await resSub.json();
-        if (Array.isArray(cloudData)) {
-          const formattedSubs: StudentSubmission[] = cloudData.map((sub: any) => {
-            const rawScore = sub.totalScore ?? sub.score ?? sub.evaluation?.totalScore ?? 0;
-            const finalScore = Number(Number(rawScore).toFixed(2));
-            return {
-              id: sub.id || sub._id || `sub-${Date.now()}-${Math.random()}`,
-              studentName: sub.studentName || sub.candidateName || 'Thí sinh',
-              candidateName: sub.studentName || sub.candidateName || 'Thí sinh',
-              studentClass: sub.studentClass || '11',
-              candidateNumber: sub.candidateNumber || 'SBD-001',
-              examCode: sub.examCode || sub.code || activeCode || '101',
-              totalScore: finalScore,
-              score: finalScore,
-              percentage: sub.percentage || Math.round((finalScore / 10) * 100),
-              submittedAt: sub.submittedAt || new Date().toLocaleString('vi-VN'),
-              timeSpentSeconds: sub.timeSpentSeconds || 0,
-              submissionReason: sub.submissionReason || 'normal',
-              violationCount: sub.violationCount || sub.violations?.length || 0,
-              answers: sub.answers || {},
-              auditLog: sub.auditLog || { violations: [] },
-              evaluation: sub.evaluation || { totalScore: finalScore, detailedFeedback: [] }
-            } as any;
-          });
-
-          if (formattedSubs.length > 0) {
-            setSubmissions(formattedSubs);
-            try {
-              if (safeStorage?.setItem) {
-                safeStorage.setItem('physixam_submissions', JSON.stringify(formattedSubs));
-              } else {
-                localStorage.setItem('physixam_submissions', JSON.stringify(formattedSubs));
-              }
-            } catch (e) {}
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('Lỗi đồng bộ submissions:', err);
-    }
-
-    // 2. Tải toàn bộ bài thi đã giao từ MongoDB Atlas
-    try {
-      const resAssign = await fetch(`/api/assignments?t=${Date.now()}`);
-      if (resAssign.ok) {
-        const cloudAssigns = await resAssign.json();
-        if (Array.isArray(cloudAssigns) && cloudAssigns.length > 0) {
-          setAssignments(cloudAssigns);
-          try {
-            localStorage.setItem('physixam_assignments', JSON.stringify(cloudAssigns));
-          } catch (e) {}
-        }
-      }
-    } catch (err) {
-      console.warn('Lỗi đồng bộ assignments:', err);
-    }
-  };
 
   useEffect(() => {
-    fetchAllDataFromMongo();
-    const interval = setInterval(() => {
-      fetchAllDataFromMongo();
-    }, 8000);
-    return () => clearInterval(interval);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Ignore storage error
+    }
+    if (theme === 'light') {
+      document.body.classList.add('theme-light');
+    } else {
+      document.body.classList.remove('theme-light');
+    }
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   }, []);
 
+  // Top-level 4-view hierarchy: 'home' | 'teacher' | 'student' | 'statistics'
+  const [currentView, setCurrentView] = useState<'home' | 'teacher' | 'student' | 'statistics'>('home');
+  const [teacherSubTab, setTeacherSubTab] = useState<'bank' | 'scrambler' | 'monitor' | 'online_exam'>('bank');
+
+  // Exam Bank & Scrambled Variants State (preserved across all view transitions)
+  const [examData, setExamData] = useState<ExamData>(FULL_MOET_28_PHYSICS_EXAM);
+  const [variants, setVariants] = useState<ScrambledExamVariant[]>(() =>
+    generateMultipleVariants(
+      FULL_MOET_28_PHYSICS_EXAM,
+      ['101', '102', '103', '104', '1102', '1104', '1106', '1108'],
+      'GDPT2018-INIT'
+    )
+  );
+  const [studentTargetCode, setStudentTargetCode] = useState<string>('');
+
+  // Synchronized Online Exam Assignments (Tab 4. Tổ Chức Thi Online)
+  const [onlineAssignments, setOnlineAssignments] = useState<OnlineExamAssignment[]>(() => {
+    try {
+      const raw = localStorage.getItem(ONLINE_ASSIGNMENTS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as OnlineExamAssignment[];
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // Fallback to default seed assignment
+    }
+    const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://smarttest.edu.vn';
+    return [
+      {
+        id: 'ONLINE-ASSIGN-1102',
+        examCode: '1102',
+        examLink: `${baseUrl}/?examCode=1102`,
+        examTitle: 'Kiểm Tra Giữa Học Kỳ I - Năm Học 2026 - 2027',
+        subject: 'Vật Lý 12',
+        assignedClasses: ['12A1', '12A2'],
+        startTime: '2026-11-10T07:30',
+        endTime: '2026-11-10T22:00',
+        durationMinutes: 50,
+        mode: 'exam',
+        violationLevel: 2,
+        maxViolations: 3,
+        sourceMode: 'bank',
+        sourceBankExamId: 'BANK-SEED-TN-01',
+        examData: FULL_MOET_28_PHYSICS_EXAM,
+        createdAt: '10/11/2026 08:00',
+      },
+    ];
+  });
+
+  // Automatically open Student Portal if examCode query parameter is present in URL
   useEffect(() => {
-    const fetchExamFromMongo = async () => {
-      try {
-        const params = new URLSearchParams(window.location.search);
-        const searchCode = params.get('code') || params.get('variant');
-        const assignId = params.get('assign') || params.get('assignmentId');
-        const examId = params.get('exam') || params.get('examId');
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const urlCode = params.get('examCode');
+      if (urlCode && urlCode.trim()) {
+        setStudentTargetCode(urlCode.trim());
+        setCurrentView('student');
+      }
+    } catch {
+      // Ignore URL parse error
+    }
+  }, []);
 
-        const targetCode = (searchCode || assignId || examId || '').trim();
-        if (!targetCode) return;
-
-        setIsLoadingAssignedExam(true);
-
-        try {
-          const response = await fetch(`/api/assignments?code=${encodeURIComponent(targetCode)}`);
-          if (response.ok) {
-            const doc = await response.json();
-            const cloudExam = doc?.examData || doc?.exam || (doc.questions ? doc : null);
-            if (cloudExam && Array.isArray(cloudExam.questions) && cloudExam.questions.length > 0) {
-              setExam(cloudExam);
-              const resolvedCode = doc.code || doc.accessCode || cloudExam.code || targetCode;
-              setActiveCode(resolvedCode);
-              setTimeRemainingSeconds((cloudExam.durationMinutes || 45) * 60);
-              
-              if (safeStorage?.setItem) {
-                safeStorage.setItem('physixam_current_exam', JSON.stringify(cloudExam));
-              } else {
-                localStorage.setItem('physixam_current_exam', JSON.stringify(cloudExam));
-              }
-              setIsLoadingAssignedExam(false);
-              return;
+  // Simulated LAN Workstations + Live Browser Student Session Sync
+  const [workstations, setWorkstations] = useState<WorkstationNode[]>(
+    INITIAL_WORKSTATION_NODES
+  );
+  const [liveSessions, setLiveSessions] = useState<SavedExamSession[]>(() => {
+    const loaded: SavedExamSession[] = [];
+    try {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('smarttest_gdpt2018_session_')) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw) as SavedExamSession;
+            if (parsed && parsed.studentId && parsed.examCode) {
+              loaded.push(parsed);
             }
           }
-        } catch (netErr) {}
+        }
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+    return loaded;
+  });
 
-        const localMatched: any = assignments.find((a: any) => 
-          String(a.id || '').toUpperCase() === targetCode.toUpperCase() ||
-          String(a.code || a.accessCode || a.examCode || '').toUpperCase() === targetCode.toUpperCase()
+  // Hydrate submissions from MongoDB Atlas / Server Cloud on mount
+  useEffect(() => {
+    fetchSubmissionsByExam('ALL')
+      .then((res) => {
+        if (res.success && Array.isArray(res.submissions) && res.submissions.length > 0) {
+          setLiveSessions(res.submissions);
+        }
+      })
+      .catch(() => {
+        // Graceful fallback to localStorage already loaded
+      });
+  }, []);
+
+  const handleUpdateExamData = useCallback((nextExam: ExamData) => {
+    setExamData(nextExam);
+    setVariants((prev) => {
+      const codes = prev.map((v) => v.code);
+      const nextVariants = generateMultipleVariants(
+        nextExam,
+        codes.length > 0 ? codes : ['101', '102', '103', '104'],
+        `UPDATE-${Date.now()}`
+      );
+      void importExamToCloud({
+        examId: nextExam.examId,
+        examCode: nextVariants[0]?.code || '1102',
+        examData: nextExam,
+        variants: nextVariants,
+      });
+      return nextVariants;
+    });
+  }, []);
+
+  const handleRegenerateVariants = useCallback(
+    (
+      codes: string[],
+      salt: string,
+      examOverride?: ExamData,
+      options?: import('./utils/scramblerAndGrader').ScramblerGenerationOptions
+    ): ScrambledExamVariant[] => {
+      const targetExam = examOverride || examData;
+      if (examOverride) {
+        setExamData(examOverride);
+      }
+      const nextVariants = generateMultipleVariants(targetExam, codes, salt, options);
+      setVariants(nextVariants);
+      void importExamToCloud({
+        examId: targetExam.examId,
+        examCode: nextVariants[0]?.code || codes[0] || '1102',
+        examData: targetExam,
+        variants: nextVariants,
+      });
+      return nextVariants;
+    },
+    [examData]
+  );
+
+  // Sync Student Exam Session directly into Teacher LAN Monitor Table & MongoDB Atlas
+  const handleStudentSessionUpdate = useCallback(
+    (session: SavedExamSession) => {
+      void submitExamToCloud({
+        ...session,
+        examId: examData.examId,
+        room: 'MAY-01',
+      });
+
+      setLiveSessions((prev) => {
+        const filtered = prev.filter(
+          (s) => !(s.studentId === session.studentId && s.examCode === session.examCode)
         );
+        return [session, ...filtered];
+      });
 
-        if (localMatched && localMatched.examData && Array.isArray(localMatched.examData.questions) && localMatched.examData.questions.length > 0) {
-          setExam(localMatched.examData);
-          const resolvedCode = localMatched.code || localMatched.accessCode || localMatched.examCode || targetCode;
-          setActiveCode(resolvedCode);
-          setTimeRemainingSeconds((localMatched.examData.durationMinutes || 45) * 60);
-        }
-      } catch (err) {} finally {
-        setIsLoadingAssignedExam(false);
-      }
-    };
+      const variantObj =
+        variants.find((v) => v.code === session.examCode) || variants[0];
+      const totalQ = variantObj
+        ? variantObj.part1.length + variantObj.part2.length + variantObj.part3.length
+        : 28;
+      const answered = variantObj
+        ? countCompletedQuestions(variantObj, session.answers)
+        : 0;
 
-    fetchExamFromMongo();
+      const liveNode: WorkstationNode = {
+        workstationId: 'MAY-01',
+        ipAddress: '192.168.1.101',
+        studentName: session.studentName,
+        studentId: session.studentId,
+        examCode: session.examCode,
+        status: session.isSubmitted
+          ? 'SUBMITTED'
+          : session.violations.length > 0
+          ? 'VIOLATION_WARN'
+          : 'ACTIVE',
+        answeredCount: answered,
+        totalQuestions: totalQ,
+        remainingSeconds: session.remainingSeconds,
+        violationCount: session.violations.length,
+        lastEventText: session.isSubmitted
+          ? `Đã nộp bài lúc ${session.submittedAt || session.lastSavedAt}`
+          : session.violations.length > 0
+          ? session.violations[session.violations.length - 1].description
+          : `Đang làm bài (Lưu lúc ${session.lastSavedAt})`,
+        score: session.finalScore,
+        isLiveBrowserUser: true,
+      };
+
+      setWorkstations((prev) => {
+        const others = prev.filter((w) => w.workstationId !== 'MAY-01');
+        return [liveNode, ...others];
+      });
+    },
+    [variants, examData.examId]
+  );
+
+  const handleResetWorkstationViolations = useCallback((workstationId: string) => {
+    setWorkstations((prev) =>
+      prev.map((w) =>
+        w.workstationId === workstationId
+          ? {
+              ...w,
+              violationCount: 0,
+              status: w.status === 'VIOLATION_WARN' ? 'ACTIVE' : w.status,
+              lastEventText: 'Giáo viên đã xác nhận & xoá cảnh báo vi phạm',
+            }
+          : w
+      )
+    );
   }, []);
 
-  useEffect(() => {
-    if (exam?.durationMinutes) {
-      setTimeRemainingSeconds(exam.durationMinutes * 60);
-    }
-    if (exam?.code) {
-      setActiveCode(exam.code);
-    }
-  }, [exam]);
+  const handleSimulateLabTick = useCallback(() => {
+    setWorkstations((prev) =>
+      prev.map((w) => {
+        if (w.isLiveBrowserUser || w.status === 'SUBMITTED') return w;
+        const nextAnswered = Math.min(
+          w.totalQuestions,
+          w.answeredCount + (Math.random() > 0.45 ? 1 : 0)
+        );
+        const nextSec = Math.max(60, w.remainingSeconds - 35);
+        const isDone = nextAnswered >= w.totalQuestions && Math.random() > 0.65;
+        return {
+          ...w,
+          answeredCount: nextAnswered,
+          remainingSeconds: nextSec,
+          status: isDone ? 'SUBMITTED' : w.status,
+          score: isDone ? Number((7.5 + Math.random() * 2.25).toFixed(2)) : w.score,
+          lastEventText: isDone
+            ? 'Đã nộp bài hoàn tất'
+            : `Đang làm câu ${nextAnswered}/${w.totalQuestions}`,
+        };
+      })
+    );
+  }, []);
 
-  useEffect(() => {
-    if (studentExamPhase !== 'launch' || appMode !== 'student' || !isRegistered) return;
-    const timer = setInterval(() => {
-      setTimeRemainingSeconds((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          handleSubmitExam();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [studentExamPhase, appMode, isRegistered]);
+  const handleSaveOnlineAssignment = useCallback(
+    (assignment: OnlineExamAssignment) => {
+      const syncedExam: ExamData = {
+        ...assignment.examData,
+        title: assignment.examTitle || assignment.examData.title,
+        subject: assignment.subject || assignment.examData.subject,
+        durationMinutes: assignment.durationMinutes || assignment.examData.durationMinutes || 50,
+      };
+      const updatedAssignment: OnlineExamAssignment = {
+        ...assignment,
+        examData: syncedExam,
+      };
 
-  const handleRequestTeacherMode = () => {
-    if (isTeacherAuthenticated) {
-      fetchAllDataFromMongo();
-      setAppMode('teacher');
-    } else {
-      setEnteredPin('');
-      setPinError(null);
-      setIsPinModalOpen(true);
-    }
-  };
-
-  const handleVerifyTeacherPin = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const savedPin = localStorage.getItem('physixam_teacher_pin') || DEFAULT_TEACHER_PIN;
-    if (enteredPin === savedPin) {
-      setIsTeacherAuthenticated(true);
-      try {
-        sessionStorage.setItem('physixam_teacher_auth', 'true');
-      } catch {}
-      setIsPinModalOpen(false);
-      setPinError(null);
-      fetchAllDataFromMongo();
-      setAppMode('teacher');
-    } else {
-      setPinError('Mã PIN bảo mật không chính xác. Vui lòng kiểm tra lại!');
-    }
-  };
-
-  const handleApplyBundle = (newBundle: ExamVariantBundle) => {
-    if (!newBundle || !Array.isArray(newBundle.variants) || newBundle.variants.length === 0) return;
-    setBundle(newBundle);
-    try {
-      const serialized = JSON.stringify(newBundle);
-      if (safeStorage?.setItem) {
-        safeStorage.setItem('physixam_bundle', serialized);
-      } else {
-        localStorage.setItem('physixam_bundle', serialized);
-      }
-    } catch (e) {}
-
-    const firstVariant: any = newBundle.variants[0];
-    const targetExam: Exam = firstVariant?.examData || firstVariant;
-    if (targetExam && Array.isArray((targetExam as any).questions)) {
-      handleUpdateExamDirectly(targetExam);
-      setActiveCode(firstVariant?.code || targetExam?.code || '101');
-    }
-  };
-
-  const handleSelectExamCode = (code: string) => {
-    if (!code) return;
-    setActiveCode(code);
-    if (exam) {
-      setExam({ ...exam, code: code });
-    }
-  };
-
-  const uploadExamToMongoDB = async (examToUpload: Exam, customCode?: string) => {
-    try {
-      const finalCode = (customCode || examToUpload.code || activeCode || '101').trim().toUpperCase();
-      await fetch('/api/assignments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: `assign-${finalCode}`,
-          code: finalCode,
-          accessCode: finalCode,
-          examCode: finalCode,
-          title: examToUpload.title,
-          examData: examToUpload,
-          assignedAt: new Date().toISOString()
-        })
-      });
-      fetchAllDataFromMongo();
-    } catch (e) {}
-  };
-
-  const handleLoadExamFromBank = (selectedPkg: ExamPackage) => {
-    if (!selectedPkg || !selectedPkg.examData) return;
-    const targetExam = selectedPkg.examData;
-    const targetCode = (targetExam.code || selectedPkg.code || '101').trim().toUpperCase();
-    
-    setExam(targetExam);
-    setActiveCode(targetCode);
-    setBundle(null);
-    try {
-      localStorage.removeItem('physixam_bundle');
-      const serialized = JSON.stringify(targetExam);
-      if (safeStorage?.setItem) {
-        safeStorage.setItem('physixam_current_exam', serialized);
-      } else {
-        localStorage.setItem('physixam_current_exam', serialized);
-      }
-    } catch (e) {}
-
-    uploadExamToMongoDB(targetExam, targetCode);
-
-    setAnswers({});
-    setFlaggedQuestionIds(new Set());
-    setCurrentQuestionIndex(0);
-    setTimeRemainingSeconds((targetExam.durationMinutes || 45) * 60);
-    setStudentExamPhase('launch');
-  };
-
-  const handleUpdateExamDirectly = (updatedExam: Exam) => {
-    if (!updatedExam) return;
-    setExam(updatedExam);
-    if (updatedExam.code) setActiveCode(updatedExam.code);
-    try {
-      const serialized = JSON.stringify(updatedExam);
-      if (safeStorage?.setItem) {
-        safeStorage.setItem('physixam_current_exam', serialized);
-      } else {
-        localStorage.setItem('physixam_current_exam', serialized);
-      }
-    } catch (e) {}
-
-    uploadExamToMongoDB(updatedExam, updatedExam.code);
-  };
-
-  const handleOpenJsonModal = () => {
-    setJsonText(JSON.stringify(exam, null, 2));
-    setJsonError(null);
-    setJsonCopied(false);
-    setIsJsonModalOpen(true);
-  };
-
-  const handleAssignExam = async (pkg: ExamPackage, assignment: ExamAssignmentInfo, switchToStudent: boolean) => {
-    const targetExam = pkg?.examData || (pkg as any)?.questions ? (pkg as any) : (exam || DEFAULT_EXAM);
-    const finalCode = (assignment as any)?.code || assignment.accessCode || targetExam.code || activeCode || '101';
-
-    const fullAssignment: any = {
-      ...assignment,
-      id: assignment.id || `assign-${Date.now()}`,
-      code: finalCode,
-      accessCode: finalCode,
-      examCode: targetExam.code || finalCode,
-      examTitle: targetExam.title || assignment.examTitle,
-      title: targetExam.title || assignment.examTitle,
-      durationMinutes: targetExam.durationMinutes || 45,
-      questions: targetExam.questions || [],
-      examData: targetExam,
-      assignedAt: new Date().toISOString(),
-      status: 'active'
-    };
-
-    setAssignments((prev) => {
-      const updated = [fullAssignment, ...prev.filter((a) => a.id !== fullAssignment.id && (a as any).code !== fullAssignment.code && a.accessCode !== fullAssignment.code)];
-      try {
-        localStorage.setItem('physixam_assignments', JSON.stringify(updated));
-      } catch (e) {}
-      return updated;
-    });
-
-    handleLoadExamFromBank(pkg);
-
-    try {
-      await fetch('/api/assignments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(fullAssignment)
-      });
-      fetchAllDataFromMongo();
-    } catch (e) {}
-
-    if (switchToStudent) setAppMode('student');
-  };
-
-  const handleDeleteAssignment = async (assignId: string) => {
-    setAssignments((prev) => {
-      const updated = prev.filter((a) => a.id !== assignId);
-      try {
-        localStorage.setItem('physixam_assignments', JSON.stringify(updated));
-      } catch (e) {}
-      return updated;
-    });
-
-    try {
-      await fetch(`/api/assignments?id=${encodeURIComponent(assignId)}`, { method: 'DELETE' });
-      fetchAllDataFromMongo();
-    } catch (e) {}
-  };
-
-  const handleAnswerChange = (questionId: string, answer: any) => {
-    if (!questionId) return;
-    setAnswers((prev) => ({ ...(prev || {}), [questionId]: answer }));
-  };
-
-  const handleToggleFlag = (questionId: string) => {
-    if (!questionId) return;
-    setFlaggedQuestionIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(questionId)) next.delete(questionId);
-      else next.add(questionId);
-      return next;
-    });
-  };
-
-  const handleRecordViolation = (event: ViolationEvent) => {
-    setAuditLog((prev) => ({
-      ...prev,
-      violations: [...(prev?.violations || []), event]
-    }));
-  };
-
-// =========================================================================
-  // XỬ LÝ NỘP BÀI: CÔ LẬP TOÀN BỘ WEB-KIT ĐỂ CHỐNG SẬP TRÌNH DUYỆT SAFARI
-  // =========================================================================
-  const handleSubmitExam = () => {
-    // 1. Dọn dẹp ép buộc các bộ lắng nghe chặn chuột và phím của Safari
-    try {
-      if (typeof window !== 'undefined') {
-        window.oncontextmenu = null;
-        window.onkeydown = null;
-        window.onblur = null;
-      }
-    } catch (e) {}
-
-    // 2. Chấm điểm an toàn, chuẩn hóa tất cả các trường dữ liệu
-    let score = 0;
-    const detailedFeedback: any[] = [];
-    const questionsList = (exam && Array.isArray(exam.questions)) ? exam.questions : (DEFAULT_EXAM.questions || []);
-
-    let part1Score = 0, part1Correct = 0, part1Total = 0;
-    let part2Score = 0, part2Correct = 0, part2Total = 0;
-    let part3Score = 0, part3Correct = 0, part3Total = 0;
-
-    questionsList.forEach((q: any) => {
-      if (!q || !q.id) return;
-      const userAns = (answers && (answers as any)[q.id]) !== undefined ? (answers as any)[q.id] : undefined;
-      let isCorrect = false;
-      let pointsAwarded = 0;
-      const qPoints = q.points || (10 / (questionsList.length || 1));
-      const qPart = q.part || 'Phần I';
-
-      if (qPart === 'Phần I') part1Total++;
-      else if (qPart === 'Phần II') part2Total++;
-      else part3Total++;
-
-      if (q.type === 'multiple_choice') {
-        if (String(userAns) === String(q.correctAnswer)) {
-          isCorrect = true;
-          pointsAwarded = qPoints;
-        }
-      } else if (q.type === 'true_false_cluster') {
-        const clusterAns = userAns || {};
-        let correctSubCount = 0;
-        q.items?.forEach((item: any) => {
-          if ((clusterAns as any)[item.id] === item.isCorrect) correctSubCount++;
-        });
-        if (correctSubCount === (q.items?.length || 1)) {
-          isCorrect = true;
-          pointsAwarded = qPoints;
-        } else if (correctSubCount > 0) {
-          pointsAwarded = Number((qPoints * (correctSubCount / (q.items?.length || 1))).toFixed(2));
-        }
-      } else if (q.type === 'short_answer') {
-        const val = typeof userAns === 'object' && userAns !== null ? userAns.value : userAns;
-        if (val && String(val).trim() === String(q.correctValue || '').trim()) {
-          isCorrect = true;
-          pointsAwarded = qPoints;
-        }
-      }
-
-      score += pointsAwarded;
-      if (isCorrect) {
-        if (qPart === 'Phần I') { part1Correct++; part1Score += pointsAwarded; }
-        else if (qPart === 'Phần II') { part2Correct++; part2Score += pointsAwarded; }
-        else { part3Correct++; part3Score += pointsAwarded; }
-      }
-
-      detailedFeedback.push({ questionId: q.id, isCorrect, pointsAwarded });
-    });
-
-    const finalScore = Number(Math.min(10, Math.max(0, score)).toFixed(2));
-    const correctCount = detailedFeedback.filter(f => f.isCorrect).length;
-    const totalCount = questionsList.length;
-    const percentage = Math.round((finalScore / 10) * 100);
-
-    const evalResult = {
-      totalScore: finalScore,
-      score: finalScore,
-      maxScore: 10,
-      percentage: isNaN(percentage) ? 0 : percentage,
-      correctCount: correctCount,
-      totalQuestions: totalCount,
-      detailedFeedback,
-      feedback: detailedFeedback,
-      partScores: {
-        part1: { score: Number(part1Score.toFixed(2)), correct: part1Correct, total: part1Total },
-        part2: { score: Number(part2Score.toFixed(2)), correct: part2Correct, total: part2Total },
-        part3: { score: Number(part3Score.toFixed(2)), correct: part3Correct, total: part3Total }
-      }
-    };
-
-    const safeExamCode = exam?.code || activeCode || '101';
-    const newSub: StudentSubmission = {
-      id: `sub-${Date.now()}`,
-      studentName: candidateInfo.name || 'Thí sinh tự do',
-      candidateName: candidateInfo.name || 'Thí sinh tự do',
-      studentClass: candidateInfo.studentClass || '11',
-      candidateNumber: candidateInfo.candidateNumber || 'SBD-001',
-      examCode: safeExamCode,
-      totalScore: finalScore,
-      score: finalScore,
-      percentage: isNaN(percentage) ? 0 : percentage,
-      submittedAt: new Date().toLocaleTimeString('vi-VN') + ' ' + new Date().toLocaleDateString('vi-VN'),
-      timeSpentSeconds: Math.max(0, ((exam?.durationMinutes || 45) * 60) - timeRemainingSeconds),
-      submissionReason: 'normal',
-      violationCount: auditLog.violations.length,
-      answers: answers || {},
-      auditLog,
-      evaluation: evalResult
-    } as any;
-
-    // Gán dữ liệu đánh giá trước
-    setEvaluation(evalResult);
-
-    // Cập nhật bộ nhớ cục bộ
-    setSubmissions((prev) => {
-      const updated = [newSub, ...(prev || [])];
-      try {
-        if (safeStorage?.setItem) {
-          safeStorage.setItem('physixam_submissions', JSON.stringify(updated));
-        } else {
-          localStorage.setItem('physixam_submissions', JSON.stringify(updated));
-        }
-      } catch (e) {}
-      return updated;
-    });
-
-    // 3. Thoát Fullscreen an toàn và cho nhịp nghỉ trước khi đổi giao diện (tránh sập Safari)
-    const safelyExitFsAndProceed = () => {
-      try {
-        const doc: any = document;
-        if (doc && (doc.fullscreenElement || doc.webkitFullscreenElement || doc.mozFullScreenElement || doc.msFullscreenElement)) {
-          const exit = doc.exitFullscreen || doc.webkitExitFullscreen || doc.mozCancelFullScreen || doc.msExitFullscreen;
-          if (exit) {
-            const p = exit.call(doc);
-            if (p && typeof p.catch === 'function') {
-              p.catch(() => {});
-            }
-          }
-        }
-      } catch (err) {}
-
-      setTimeout(() => {
-        setStudentExamPhase('student_results');
-
-        // Gửi ngầm dữ liệu lên MongoDB
+      setOnlineAssignments((prev) => {
+        const filtered = prev.filter(
+          (a) =>
+            a.id !== updatedAssignment.id &&
+            a.examCode.trim().toUpperCase() !== updatedAssignment.examCode.trim().toUpperCase()
+        );
+        const nextList = [updatedAssignment, ...filtered];
         try {
-          fetch('/api/submissions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(newSub)
-          }).then(() => {
-            fetchAllDataFromMongo();
-          }).catch(() => {});
-        } catch (netErr) {}
-      }, 100);
-    };
-
-    safelyExitFsAndProceed();
-  };
-
-  const handleDeleteSubmission = async (submissionId: string) => {
-    setSubmissions((prev: any[]) => {
-      const updated = (prev || []).filter((s: any) => String(s.id || s._id) !== String(submissionId));
-      try {
-        if (safeStorage?.setItem) {
-          safeStorage.setItem('physixam_submissions', JSON.stringify(updated));
-        } else {
-          localStorage.setItem('physixam_submissions', JSON.stringify(updated));
+          localStorage.setItem(ONLINE_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(nextList));
+        } catch {
+          // Ignore storage error
         }
-      } catch (e) {}
-      return updated;
+        return nextList;
+      });
+
+      setExamData(syncedExam);
+      setVariants((prev) => {
+        const cleanCode = updatedAssignment.examCode.trim();
+        const generated = generateMultipleVariants(
+          syncedExam,
+          [cleanCode],
+          `ONLINE-SYNC-${cleanCode}-${Date.now()}`
+        );
+        const targetVariant = generated[0];
+        const others = prev.filter(
+          (v) => v.code.trim().toUpperCase() !== cleanCode.toUpperCase()
+        );
+        const nextList = targetVariant ? [targetVariant, ...others] : prev;
+        void syncOnlineAssignmentToCloud(updatedAssignment, nextList);
+        return nextList;
+      });
+    },
+    []
+  );
+
+  const handleDeleteOnlineAssignment = useCallback((assignmentId: string) => {
+    setOnlineAssignments((prev) => {
+      const nextList = prev.filter((a) => a.id !== assignmentId);
+      try {
+        localStorage.setItem(ONLINE_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(nextList));
+      } catch {
+        // Ignore storage error
+      }
+      return nextList;
     });
+  }, []);
 
-    try {
-      await fetch(`/api/submissions/${submissionId}`, { method: 'DELETE' });
-      fetchAllDataFromMongo();
-    } catch (err) {}
-  };
+  const handleLaunchStudentWithCode = useCallback((code?: string) => {
+    setStudentTargetCode(code || '');
+    setCurrentView('student');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
 
-  const handleClearSubmissions = async () => {
-    setSubmissions([]);
-    try {
-      if (safeStorage?.setItem) {
-        safeStorage.setItem('physixam_submissions', JSON.stringify([]));
-      } else {
-        localStorage.setItem('physixam_submissions', JSON.stringify([]));
+  const handleNavigateTeacher = useCallback(
+    (subTab?: 'bank' | 'scrambler' | 'monitor' | 'online_exam') => {
+      if (subTab) {
+        setTeacherSubTab(subTab);
       }
-    } catch (e) {}
+      setCurrentView('teacher');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    []
+  );
 
-    try {
-      await fetch('/api/submissions/clear-all', { method: 'DELETE' });
-      fetchAllDataFromMongo();
-    } catch (err) {}
-  };
-
-  const handleOpenPrint = (mode: 'exam_only' | 'exam_with_solutions') => {
-    setActivePrintMode(mode);
-    setAppMode('print');
-    setTimeout(() => { window.print(); }, 300);
-  };
-
-  const handleOpenPrintMatrix = (targetBundle: ExamVariantBundle) => {
-    if (targetBundle) setBundle(targetBundle);
-    setActivePrintMode('matrix');
-    setAppMode('print');
-    setTimeout(() => { window.print(); }, 300);
-  };
-
-  const handleStartExamWithRegistration = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!candidateInfo.name.trim() || !candidateInfo.studentClass.trim() || !candidateInfo.candidateNumber.trim()) {
-      alert('Vui lòng nhập đầy đủ: Họ và tên, Lớp và Số báo danh để bắt đầu bài thi!');
-      return;
+  const handleScrollToFeatures = useCallback(() => {
+    if (currentView !== 'home') {
+      setCurrentView('home');
+      window.setTimeout(() => {
+        document
+          .getElementById('features-section')
+          ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 80);
+    } else {
+      document
+        .getElementById('features-section')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+  }, [currentView]);
 
-    try {
-      if (document.documentElement.requestFullscreen) {
-        document.documentElement.requestFullscreen().catch(() => {});
-      } else if ((document.documentElement as any).webkitRequestFullscreen) {
-        (document.documentElement as any).webkitRequestFullscreen();
+  const handleDeleteStudentRecord = useCallback(
+    (studentId: string, examCode: string, workstationId?: string) => {
+      const cleanId = studentId.trim().toUpperCase();
+      const cleanCode = examCode.trim();
+      try {
+        localStorage.removeItem(`smarttest_gdpt2018_session_${cleanId}_${cleanCode}`);
+      } catch {
+        // Ignore storage error
       }
-    } catch (err) {}
+      setLiveSessions((prev) =>
+        prev.filter(
+          (s) =>
+            !(
+              s.studentId.trim().toUpperCase() === cleanId &&
+              s.examCode.trim() === cleanCode
+            )
+        )
+      );
+      setWorkstations((prev) =>
+        prev.filter(
+          (w) =>
+            !(
+              (w.studentId.trim().toUpperCase() === cleanId &&
+                w.examCode.trim() === cleanCode) ||
+              (workstationId && w.workstationId === workstationId)
+            )
+        )
+      );
+    },
+    []
+  );
 
-    setIsRegistered(true);
-  };
+  const handleClearAllRecords = useCallback(() => {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('smarttest_gdpt2018_session_')) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch {
+      // Ignore storage error
+    }
+    setLiveSessions([]);
+    setWorkstations([]);
+  }, []);
 
-  const safeCurrentExam = (exam && Array.isArray(exam.questions) && exam.questions.length > 0) ? exam : DEFAULT_EXAM;
+  const handleRestoreSampleRecords = useCallback(() => {
+    setWorkstations(INITIAL_WORKSTATION_NODES);
+  }, []);
+
+  const handleResetSystemCache = useCallback(() => {
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('smarttest_gdpt2018_session_')) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch {
+      // Ignore storage access errors
+    }
+    setExamData(FULL_MOET_28_PHYSICS_EXAM);
+    setVariants(
+      generateMultipleVariants(
+        FULL_MOET_28_PHYSICS_EXAM,
+        ['101', '102', '103', '104'],
+        'GDPT2018-RESET'
+      )
+    );
+    setWorkstations(INITIAL_WORKSTATION_NODES);
+    setLiveSessions([]);
+  }, []);
 
   return (
-    <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans antialiased selection:bg-indigo-500 selection:text-white">
-      
-      <style>{`
-        @keyframes marqueeScroll {
-          0% { transform: translateX(0%); }
-          100% { transform: translateX(-50%); }
-        }
-        .marquee-track {
-          display: inline-flex;
-          white-space: nowrap;
-          animation: marqueeScroll 28s linear infinite;
-        }
-        .marquee-track:hover {
-          animation-play-state: paused;
-        }
-      `}</style>
-
-      {/* THANH ĐIỀU HƯỚNG NỔI */}
-      {!(appMode === 'student' && isRegistered && studentExamPhase === 'launch') && (
-        <header className="sticky top-0 z-40 px-3 sm:px-6 py-2.5 print:hidden">
-          <div className="max-w-7xl mx-auto backdrop-blur-xl bg-slate-900/90 border border-slate-800/80 rounded-2xl shadow-xl shadow-slate-950/20 px-4 py-2 flex items-center justify-between gap-4">
-            
-            <div 
-              onClick={() => setAppMode('home')}
-              className="flex items-center gap-3 cursor-pointer group select-none min-w-0"
-              title="Về Trang chủ Pano"
-            >
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 flex items-center justify-center font-black text-white text-xs shadow-md group-hover:scale-105 transition shrink-0">
-                <Atom className="w-4 h-4" />
-              </div>
-              <div className="min-w-0">
-                <span className="font-black text-sm tracking-wide text-white group-hover:text-indigo-300 transition truncate block">
-                  {branding.schoolName}
-                </span>
-                <span className="text-3xs text-indigo-300/90 font-mono tracking-wider truncate block">
-                  {branding.subtitle}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1 bg-slate-950/60 p-1 rounded-xl border border-slate-800">
-              <button
-                type="button"
-                onClick={() => setAppMode('home')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                  appMode === 'home'
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <Home className="w-3.5 h-3.5" />
-                <span>Trang chủ</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleRequestTeacherMode}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                  appMode === 'teacher'
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                {isTeacherAuthenticated ? <LayoutDashboard className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5 text-amber-400" />}
-                <span>Giáo viên</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAppMode('student')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
-                  appMode === 'student'
-                    ? 'bg-emerald-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                <GraduationCap className="w-3.5 h-3.5" />
-                <span>Học sinh</span>
-              </button>
-            </div>
-          </div>
-        </header>
-      )}
-
-      {/* CHẾ ĐỘ TRANG CHỦ */}
-      {appMode === 'home' && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 space-y-4 animate-in fade-in duration-300">
-          <section className="relative rounded-3xl overflow-hidden shadow-xl border border-indigo-900/40 bg-slate-950 min-h-[250px] sm:min-h-[290px] flex items-center">
-            <div 
-              className="absolute inset-0 bg-cover bg-center transition-all duration-700 filter brightness-75 scale-105"
-              style={{ backgroundImage: `url(${branding.bannerUrl || PRESET_BANNERS[0].url})` }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/80 to-indigo-950/70" />
-
-            <div className="relative z-10 p-5 sm:p-8 lg:p-10 max-w-4xl space-y-3.5">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-3xs sm:text-xs font-black backdrop-blur-md shadow-xs">
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                <span>PhysiXam Online • Khảo thí Vật lí Chuẩn GDPT 2018</span>
-              </div>
-
-              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-white tracking-tight leading-tight drop-shadow-lg">
-                {branding.schoolName}
-              </h1>
-
-              <p className="text-xs sm:text-sm text-slate-200 font-medium leading-relaxed max-w-2xl drop-shadow-md">
-                {branding.subtitle}
-              </p>
-
-              <div className="flex flex-wrap items-center gap-2.5 pt-1.5">
-                <button
-                  type="button"
-                  onClick={() => setAppMode('student')}
-                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-emerald-600/30 transition-all flex items-center gap-2 cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+    <div
+      className={`min-h-screen flex flex-col transition-colors duration-200 ${
+        theme === 'light'
+          ? 'theme-light bg-slate-50 text-slate-900'
+          : 'bg-[#0b0f19] text-slate-100'
+      }`}
+    >
+      {/* Persistent Top Navigation Bar */}
+      <header className="sticky top-0 z-40 flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-5 py-2.5 bg-[#0b0f19]/95 backdrop-blur border-b border-indigo-950/90 no-print">
+        {/* Zone 1: Prominent Exam/Assessment Emblem Icon & Theme Switcher */}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <a
+            href="#top"
+            onClick={(e) => {
+              e.preventDefault();
+              setCurrentView('home');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            title="Hệ Thống Khảo Thí & Kiểm Tra Đánh Giá Thông Minh (Đa Môn Học)"
+            aria-label="Trang chủ Hệ thống Khảo thí & Kiểm tra"
+            className="group relative flex items-center gap-2 p-1 rounded-xl transition-transform hover:scale-105 focus:outline-none shrink-0"
+          >
+            {/* Standout Exam & Assessment Crest Emblem (SVG) */}
+            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600 via-indigo-600 to-blue-600 p-0.5 shadow-md shadow-violet-600/30 ring-1 ring-white/25 group-hover:ring-violet-300 transition-all">
+              <div className="w-full h-full rounded-[10px] bg-slate-950/25 flex items-center justify-center">
+                <svg
+                  viewBox="0 0 40 40"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-7 h-7"
                 >
-                  <GraduationCap className="w-4 h-4" />
-                  <span>Vào Thi Trực Tuyến</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleRequestTeacherMode}
-                  className="px-5 py-2.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-600 text-white font-black text-xs sm:text-sm shadow-lg shadow-indigo-600/30 transition-all flex items-center gap-2 backdrop-blur-md cursor-pointer hover:scale-[1.02] active:scale-[0.98] border border-indigo-400/30"
-                >
-                  <Lock className="w-4 h-4 text-amber-400" />
-                  <span>Bảng Điều Khiển Giáo Viên</span>
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-      )}
-
-      {/* CHẾ ĐỘ HỌC SINH */}
-      {appMode === 'student' && (
-        <main className="w-full px-2 sm:px-4 py-2">
-          {isLoadingAssignedExam ? (
-            <div className="min-h-[60vh] flex flex-col items-center justify-center p-8 text-center space-y-4">
-              <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
-              <h3 className="font-black text-lg text-slate-800">Đang tải đề thi từ máy chủ...</h3>
-              <p className="text-xs text-slate-500 max-w-sm">Hệ thống đang đồng bộ câu hỏi và cấu trúc bài thi về thiết bị của em.</p>
-            </div>
-          ) : !isRegistered ? (
-            <div className="min-h-[80vh] flex items-center justify-center p-4 animate-in fade-in duration-300">
-              <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-200 space-y-6">
-                
-                <div className="text-center space-y-2">
-                  <div className="w-16 h-16 rounded-3xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center mx-auto shadow-inner">
-                    <UserCheck className="w-8 h-8" />
-                  </div>
-                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                    Xác Nhận Thông Tin Thí Sinh
-                  </h2>
-                  <p className="text-xs text-slate-500 font-medium">
-                    {safeCurrentExam.title} (Mã đề: <span className="font-mono font-bold text-indigo-600">{activeCode}</span>)
-                  </p>
-                </div>
-
-                <form onSubmit={handleStartExamWithRegistration} className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
-                      Họ và tên thí sinh <span className="text-rose-500">*</span>:
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={candidateInfo.name}
-                      onChange={(e) => setCandidateInfo({ ...candidateInfo, name: e.target.value })}
-                      placeholder="Ví dụ: Nguyễn Văn An"
-                      className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
-                        Lớp <span className="text-rose-500">*</span>:
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={candidateInfo.studentClass}
-                        onChange={(e) => setCandidateInfo({ ...candidateInfo, studentClass: e.target.value })}
-                        placeholder="Ví dụ: 11A1"
-                        className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1.5">
-                        Số báo danh (SBD) <span className="text-rose-500">*</span>:
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={candidateInfo.candidateNumber}
-                        onChange={(e) => setCandidateInfo({ ...candidateInfo, candidateNumber: e.target.value })}
-                        placeholder="Ví dụ: 1101"
-                        className="w-full px-4 py-3 rounded-2xl border border-slate-300 focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-none font-bold text-sm text-slate-900 transition font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm shadow-xl shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
-                  >
-                    <span>Bắt Đầu Làm Bài Thi Ngay</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </form>
-              </div>
-            </div>
-          ) : (
-            <>
-              {studentExamPhase === 'launch' && (
-                <StudentExamLaunch
-                  exam={safeCurrentExam}
-                  antiCheatConfig={antiCheatConfig}
-                  candidateInfo={candidateInfo}
-                  timeRemainingSeconds={timeRemainingSeconds}
-                  onAnswerChange={handleAnswerChange}
-                  answers={answers || {}}
-                  flaggedQuestionIds={flaggedQuestionIds || new Set()}
-                  onToggleFlag={handleToggleFlag}
-                  currentQuestionIndex={currentQuestionIndex}
-                  onSelectQuestion={setCurrentQuestionIndex}
-                  onSubmitExam={handleSubmitExam}
-                  onRecordViolation={handleRecordViolation}
-                />
-              )}
-
-              {/* HIỂN THỊ KẾT QUẢ VỚI LỚP BẢO VỆ CHỐNG TRẮNG TRANG */}
-              {studentExamPhase === 'student_results' && (
-                <ResultsErrorBoundary
-                  evaluation={evaluation}
-                  candidateInfo={candidateInfo}
-                  exam={safeCurrentExam}
-                  onRetake={() => {
-                    setAnswers({});
-                    setStudentExamPhase('launch');
-                    setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
-                  }}
-                  onOpenTeacherMode={handleRequestTeacherMode}
-                >
-                  <ExamResults
-                    exam={safeCurrentExam}
-                    answers={answers || {}}
-                    evaluation={evaluation || { totalScore: 0, detailedFeedback: [] }}
-                    candidateInfo={candidateInfo}
-                    timeRemainingSeconds={timeRemainingSeconds}
-                    auditLog={auditLog}
-                    onRetake={() => {
-                      setAnswers({});
-                      setStudentExamPhase('launch');
-                      setTimeRemainingSeconds((safeCurrentExam.durationMinutes || 45) * 60);
-                    }}
-                    onOpenTeacherMode={handleRequestTeacherMode}
-                    onOpenPrint={(printMode) => handleOpenPrint(printMode === 'exam_with_solutions' ? 'exam_with_solutions' : 'exam_only')}
+                  {/* Exam Clipboard / Test Sheet */}
+                  <rect
+                    x="8"
+                    y="9"
+                    width="20"
+                    height="25"
+                    rx="3.5"
+                    fill="#FFFFFF"
+                    fillOpacity="0.95"
                   />
-                </ResultsErrorBoundary>
-              )}
-            </>
-          )}
-        </main>
-      )}
-
-      {/* CHẾ ĐỘ BẢNG ĐIỀU KHIỂN GIÁO VIÊN */}
-      {appMode === 'teacher' && (
-        <TeacherDashboard
-          exam={safeCurrentExam}
-          currentExam={safeCurrentExam}
-          activeCode={activeCode}
-          availableCodes={availableCodes}
-          onSelectExamCode={handleSelectExamCode}
-          bundle={bundle}
-          onApplyBundle={handleApplyBundle}
-          onSelectExamPackage={handleLoadExamFromBank}
-          onUpdateExam={handleUpdateExamDirectly}
-          submissions={submissions || []}
-          onDeleteSubmission={handleDeleteSubmission}
-          onClearSubmissions={handleClearSubmissions}
-          antiCheatConfig={antiCheatConfig}
-          onChangeAntiCheatConfig={setAntiCheatConfig}
-          assignments={assignments}
-          onAssignExam={handleAssignExam}
-          onDeleteAssignment={handleDeleteAssignment}
-          onOpenPrint={handleOpenPrint}
-          onOpenPrintMatrix={handleOpenPrintMatrix}
-          onOpenTeacherJsonModal={handleOpenJsonModal}
-          onPreviewAsStudent={() => {
-            setIsRegistered(false);
-            setAppMode('student');
-          }}
-          onNavigateHome={() => setAppMode('home')}
-          onRefreshData={fetchAllDataFromMongo}
-        />
-      )}
-
-      {/* CHẾ ĐỘ IN ẤN */}
-      {appMode === 'print' && (
-        <div className="bg-white p-6 sm:p-10 rounded-3xl shadow-sm border border-slate-200 print:border-none print:shadow-none print:p-0">
-          <div className="flex items-center justify-between pb-6 mb-6 border-b border-slate-200 print:hidden">
-            <button
-              type="button"
-              onClick={handleRequestTeacherMode}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs cursor-pointer"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Quay lại Bảng điều khiển</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-sm cursor-pointer"
-            >
-              <Printer className="w-4 h-4" />
-              <span>Xác nhận In ngay</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL MÃ PIN */}
-      {isPinModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 print:hidden animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-5">
-            <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto shadow-inner border border-amber-200">
-              <KeyRound className="w-7 h-7" />
-            </div>
-
-            <div>
-              <h3 className="font-black text-slate-900 text-lg">Xác Thực Quyền Giáo Viên</h3>
-              <p className="text-xs text-slate-500 mt-1">Vui lòng nhập mã PIN bảo mật để tiếp tục.</p>
-            </div>
-
-            <form onSubmit={handleVerifyTeacherPin} className="space-y-4">
-              <input
-                type="password"
-                autoFocus
-                maxLength={10}
-                value={enteredPin}
-                onChange={(e) => {
-                  setEnteredPin(e.target.value);
-                  setPinError(null);
-                }}
-                placeholder="Nhập mã PIN (Mặc định: 123456)"
-                className="w-full px-4 py-3 text-center tracking-widest text-lg font-black rounded-2xl border border-slate-300 focus:border-indigo-600 outline-none transition"
-              />
-
-              {pinError && (
-                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
-                  {pinError}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setIsPinModalOpen(false)}
-                  className="flex-1 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 cursor-pointer"
-                >
-                  Hủy
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 shadow-md cursor-pointer"
-                >
-                  Xác nhận
-                </button>
+                  {/* Top Clip */}
+                  <rect
+                    x="13.5"
+                    y="6.5"
+                    width="9"
+                    height="4.5"
+                    rx="2"
+                    fill="#FBBF24"
+                  />
+                  {/* Question Lines */}
+                  <rect x="12" y="15" width="7" height="2" rx="1" fill="#4338CA" />
+                  <rect x="12" y="20" width="12" height="2" rx="1" fill="#6366F1" />
+                  <rect x="12" y="25" width="9" height="2" rx="1" fill="#6366F1" />
+                  {/* Gold Checkmark Badge (Exam Passed / Verified) */}
+                  <circle cx="27.5" cy="27.5" r="7.5" fill="#10B981" stroke="#FFFFFF" strokeWidth="1.8" />
+                  <path
+                    d="M24.3 27.6L26.5 29.8L31 25.3"
+                    stroke="#FFFFFF"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  {/* Sparkle Star */}
+                  <path
+                    d="M31 7L32.1 9.9L35 11L32.1 12.1L31 15L29.9 12.1L27 11L29.9 9.9L31 7Z"
+                    fill="#FDE047"
+                  />
+                </svg>
               </div>
-            </form>
+            </div>
+          </a>
+
+          {/* Dual-Theme Switcher Button (Tím Than vs. Nền Trắng) */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={
+              theme === 'dark'
+                ? 'Chuyển sang giao diện Nền Trắng (Light Theme)'
+                : 'Chuyển sang giao diện Tím Than (Dark Theme)'
+            }
+            aria-label="Chuyển đổi giao diện Sáng / Tối"
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shrink-0 ${
+              theme === 'dark'
+                ? 'bg-indigo-950/80 hover:bg-indigo-900 border-violet-700/70 text-violet-200'
+                : 'bg-violet-50 hover:bg-violet-100 border-violet-300 text-violet-800 shadow-xs'
+            }`}
+          >
+            {theme === 'dark' ? (
+              <>
+                <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Nền Trắng</span>
+              </>
+            ) : (
+              <>
+                <Moon className="w-3.5 h-3.5 text-violet-700 shrink-0" />
+                <span>Tím Than</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Zone 2: Quick Navigation Links */}
+        <nav className="hidden md:flex items-center gap-3.5 lg:gap-5 text-sm font-medium text-slate-300">
+          <button
+            type="button"
+            onClick={() => {
+              setCurrentView('home');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+              currentView === 'home'
+                ? 'text-violet-400 border-b-2 border-violet-400 font-semibold'
+                : ''
+            }`}
+          >
+            Trang Chủ
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleNavigateTeacher()}
+            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+              currentView === 'teacher'
+                ? 'text-violet-400 border-b-2 border-violet-400 font-semibold'
+                : ''
+            }`}
+          >
+            Cổng Giáo Viên
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleLaunchStudentWithCode()}
+            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+              currentView === 'student'
+                ? 'text-emerald-400 border-b-2 border-emerald-400 font-semibold'
+                : ''
+            }`}
+          >
+            Cổng Học Sinh
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setCurrentView('statistics');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+              currentView === 'statistics'
+                ? 'text-amber-400 border-b-2 border-amber-400 font-semibold'
+                : ''
+            }`}
+          >
+            Thống Kê
+          </button>
+
+          <button
+            type="button"
+            onClick={handleScrollToFeatures}
+            className="hover:text-white transition-colors whitespace-nowrap shrink-0 py-1"
+          >
+            Giới Thiệu Tính Năng
+          </button>
+        </nav>
+
+        {/* Zone 3: Role Switcher Action Buttons */}
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => handleNavigateTeacher()}
+            className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 ${
+              currentView === 'teacher'
+                ? 'bg-indigo-900/90 border-violet-400 text-white'
+                : 'bg-indigo-950/60 hover:bg-indigo-900/70 border-indigo-700/80 text-indigo-200'
+            }`}
+          >
+            Đăng Nhập Quản Trị
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleLaunchStudentWithCode()}
+            className="px-3.5 py-2 text-xs sm:text-sm font-bold rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-colors whitespace-nowrap shrink-0 shadow-xs"
+          >
+            Vào Phòng Thi Thí Sinh
+          </button>
+        </div>
+      </header>
+
+      {/* Main Content Area — Preserving state across 'home' | 'teacher' | 'student' | 'statistics' */}
+      <main className="flex-1">
+        {currentView === 'home' && (
+          <LandingPage
+            examData={examData}
+            variants={variants}
+            workstations={workstations}
+            onNavigateTeacher={handleNavigateTeacher}
+            onNavigateStudent={handleLaunchStudentWithCode}
+            onResetSystemCache={handleResetSystemCache}
+          />
+        )}
+
+        {currentView === 'teacher' && (
+          <TeacherPortal
+            activeSubTab={teacherSubTab}
+            setActiveSubTab={setTeacherSubTab}
+            examData={examData}
+            onUpdateExamData={handleUpdateExamData}
+            variants={variants}
+            onRegenerateVariants={handleRegenerateVariants}
+            workstations={workstations}
+            onResetWorkstationViolations={handleResetWorkstationViolations}
+            onSimulateLabTick={handleSimulateLabTick}
+            onLaunchStudentWithCode={handleLaunchStudentWithCode}
+            liveSessions={liveSessions}
+            onlineAssignments={onlineAssignments}
+            onSaveOnlineAssignment={handleSaveOnlineAssignment}
+            onDeleteOnlineAssignment={handleDeleteOnlineAssignment}
+            onNavigateHome={() => {
+              setCurrentView('home');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          />
+        )}
+
+        {currentView === 'student' && (
+          <StudentExamEnvironment
+            variants={variants}
+            initialExamCode={studentTargetCode}
+            onSessionUpdate={handleStudentSessionUpdate}
+            onlineAssignments={onlineAssignments}
+          />
+        )}
+
+        {currentView === 'statistics' && (
+          <StatisticsPortal
+            examData={examData}
+            variants={variants}
+            workstations={workstations}
+            liveSessions={liveSessions}
+            onDeleteStudentRecord={handleDeleteStudentRecord}
+            onClearAllRecords={handleClearAllRecords}
+            onRestoreSampleRecords={handleRestoreSampleRecords}
+          />
+        )}
+      </main>
+
+      {/* Formal Educational Branding Footer */}
+      <footer className="border-t border-slate-900 bg-[#080b12] px-6 py-5 text-xs text-slate-400 no-print">
+        <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-bold text-slate-200">SmartTest Physics GDPT 2018</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono text-violet-400">Phiên bản v2.6 GDPT 2018</span>
+            <span aria-hidden="true">·</span>
+            <span>Hệ thống khảo thí, trộn đề & thi phòng máy Vật Lý THPT</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-4">
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentView('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="hover:text-white transition-colors whitespace-nowrap"
+            >
+              Trang Chủ
+            </button>
+            <button
+              type="button"
+              onClick={() => handleNavigateTeacher('bank')}
+              className="hover:text-white transition-colors whitespace-nowrap"
+            >
+              Cổng Giáo Viên
+            </button>
+            <button
+              type="button"
+              onClick={() => handleLaunchStudentWithCode('101')}
+              className="hover:text-white transition-colors whitespace-nowrap"
+            >
+              Phòng Thi Kiosk
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentView('statistics');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="hover:text-white transition-colors whitespace-nowrap"
+            >
+              Thống Kê Điểm
+            </button>
+            <button
+              type="button"
+              onClick={handleResetSystemCache}
+              className="text-rose-400 hover:text-rose-300 font-mono transition-colors whitespace-nowrap"
+            >
+              Reset Cache
+            </button>
           </div>
         </div>
-      )}
+      </footer>
     </div>
   );
 }

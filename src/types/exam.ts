@@ -1,192 +1,224 @@
-export type QuestionType = 'multiple_choice' | 'true_false_cluster' | 'short_answer';
-
-export type CognitiveLevel = 'NB' | 'TH' | 'VD' | 'VDC';
-
-export type PhysicsTopic = 
-  | 'Cơ học & Động lực học' 
-  | 'Dao động & Sóng cơ' 
-  | 'Điện từ học & Mạch điện xoay chiều' 
-  | 'Nhiệt học & Thuyết động học' 
-  | 'Quang học & Sóng ánh sáng' 
-  | 'Vật lí hạt nhân & Hiện đại';
-
-export interface DiagramData {
-  type: 'svg' | 'image';
-  content?: string; // SVG raw string or Image URL
-  url?: string; // External web image URL
-  caption?: string;
-  altText?: string;
-  aspectRatio?: string;
-}
-
-export interface BaseQuestion {
+export interface Part1Question {
   id: string;
-  type: QuestionType;
-  topic: PhysicsTopic;
-  part: 'Phần I' | 'Phần II' | 'Phần III';
-  title: string;
-  stem: string; // Markdown/KaTeX text
-  diagram?: DiagramData;
-  points: number;
-  level?: CognitiveLevel | string;
-  cognitive_level?: CognitiveLevel | string;
-  difficulty?: string;
-  explanation: {
-    overview: string;
-    stepByStep: string[];
-    keyFormula?: string;
-  };
-  needs_review?: boolean;
+  topic: string;
+  question: string;
+  options: [string, string, string, string]; // A, B, C, D text (without 'A. ' prefix)
+  correctIndex: number; // 0 = A, 1 = B, 2 = C, 3 = D
+  correct_answer?: 'A' | 'B' | 'C' | 'D';
+  points: number; // Default 0.25
+  explanation: string;
+  has_image?: boolean;
+  image_url?: string;
 }
 
-export interface MultipleChoiceOption {
-  id: string; // 'A' | 'B' | 'C' | 'D'
-  text: string;
-}
-
-export interface MultipleChoiceQuestion extends BaseQuestion {
-  type: 'multiple_choice';
-  options: MultipleChoiceOption[];
-  correctAnswer: string; // 'A' | 'B' | 'C' | 'D'
-}
-
-export interface TrueFalseItem {
+export interface Part2SubStatement {
   id: string; // 'a' | 'b' | 'c' | 'd'
-  statement: string;
-  correctAnswer: boolean;
-  level?: CognitiveLevel | string;
-  cognitive_level?: CognitiveLevel | string;
-  difficulty?: string;
+  text: string;
+  isTrue: boolean;
+  is_correct?: boolean;
   explanation?: string;
 }
 
-export interface TrueFalseClusterQuestion extends BaseQuestion {
-  type: 'true_false_cluster';
-  items: TrueFalseItem[];
-}
-
-export interface ShortAnswerQuestion extends BaseQuestion {
-  type: 'short_answer';
-  correctValue: number | string;
-  tolerance?: number;
-  acceptedUnits: string[];
-  unitHint?: string;
-  placeholder?: string;
-}
-
-export type Question = MultipleChoiceQuestion | TrueFalseClusterQuestion | ShortAnswerQuestion;
-
-export interface Exam {
+export interface Part2Question {
   id: string;
-  code?: string; // Ví dụ: '101', '102', 'Gốc'
-  title: string;
-  subtitle: string;
-  gradeLevel: string;
-  durationMinutes: number;
-  totalPoints: number;
-  instructions: string[];
-  questions: Question[];
-}
-
-export interface ShufflingOptions {
-  numberOfVariants: number; // 2, 4, 8...
-  startingCode: number; // 101, 201...
-  shuffleQuestionsWithinParts: boolean;
-  shuffleOptionsPart1: boolean;
-  shuffleStatementsPart2: boolean;
-}
-
-export interface AnswerKeyMatrixRow {
-  originalIndex: number;
-  part: 'Phần I' | 'Phần II' | 'Phần III';
-  questionId: string;
-  title: string;
   topic: string;
-  answersByCode: { [code: string]: string }; // mã đề -> đáp án tóm tắt ('A', 'Đ-S-Đ-S', '6.21')
+  stem: string;
+  statements: [Part2SubStatement, Part2SubStatement, Part2SubStatement, Part2SubStatement];
+  points: number; // Default 1.00 max (0.10 / 0.25 / 0.50 / 1.00)
+  explanation: string;
+  has_image?: boolean;
+  image_url?: string;
 }
 
-export interface ExamVariantBundle {
-  originalExamId: string;
-  originalExam: Exam;
-  variants: Exam[];
-  matrix: AnswerKeyMatrixRow[];
-  generatedAt: string;
+export interface Part3Question {
+  id: string;
+  topic: string;
+  question: string;
+  unit?: string;
+  answer: string; // Numeric string e.g. "2,5" or "2.5" or "150"
+  correct_value?: string;
+  points: number; // Default 0.25
+  explanation: string;
+  has_image?: boolean;
+  image_url?: string;
 }
 
-export type StudentAnswers = {
-  [questionId: string]: 
-    | string // for multiple_choice ('A')
-    | { [subItemId: string]: boolean } // for true_false_cluster ({ a: true, b: false })
-    | { value: string; unit: string }; // for short_answer
-};
+export interface ExamData {
+  examId: string;
+  title: string;
+  subject: string;
+  grade: string;
+  curriculum: string;
+  durationMinutes: number;
+  part1: Part1Question[];
+  part2: Part2Question[];
+  part3: Part3Question[];
+}
+
+export interface ScrambledPart1Question extends Part1Question {
+  originalQuestionNumber: number;
+  displayNumber: number; // 1..18
+  optionPermutation: number[]; // maps display index -> original index
+}
+
+export interface ScrambledPart2Statement extends Part2SubStatement {
+  displayLabel: 'a' | 'b' | 'c' | 'd';
+  originalLabel: string;
+  is_correct?: boolean;
+}
+
+export interface ScrambledPart2Question extends Omit<Part2Question, 'statements'> {
+  originalQuestionNumber: number;
+  displayNumber: number; // 1..4 (or 19..22 when continuous numbering is enabled)
+  statements: [
+    ScrambledPart2Statement,
+    ScrambledPart2Statement,
+    ScrambledPart2Statement,
+    ScrambledPart2Statement
+  ];
+}
+
+export interface ScrambledPart3Question extends Part3Question {
+  originalQuestionNumber: number;
+  displayNumber: number; // 1..6 (or 23..28 when continuous numbering is enabled)
+}
+
+export interface ScrambledVariantAdminHeader {
+  governingBody: string;
+  schoolName: string;
+  examTerm: string;
+  subjectName: string;
+  schoolYear?: string;
+  durationMinutes: number;
+  restartIndexPerPart: boolean;
+  questionLabel: string;
+  questionSeparator: string;
+  optionsInTable?: boolean;
+  shuffleClusterQuestions?: boolean;
+  clusterRangesText?: string;
+}
+
+export interface ScrambledExamVariant {
+  code: string; // e.g., "1102", "1104", "1106", "1108" or "101".."104"
+  createdAt: string;
+  durationMinutes: number;
+  title: string;
+  subject: string;
+  adminHeader?: ScrambledVariantAdminHeader;
+  part1: ScrambledPart1Question[];
+  part2: ScrambledPart2Question[];
+  part3: ScrambledPart3Question[];
+}
 
 export interface ViolationEvent {
   id: string;
-  timestamp: string; // ví dụ: "14:32:05"
-  reason: string;    // "Chuyển sang tab/cửa sổ khác", "Thoát toàn màn hình", etc.
+  timestamp: string;
+  type: 'TAB_SWITCH' | 'WINDOW_BLUR' | 'FULLSCREEN_EXIT' | 'SHORTCUT_BLOCKED' | 'COPY_PASTE_ATTEMPT';
+  description: string;
 }
 
-export interface ExamAuditLog {
-  violationCount: number;
-  maxAllowedViolations: number;
+export interface StudentAnswersState {
+  // Part I keyed by question.id -> selected option index (0..3)
+  part1: Record<string, number | undefined>;
+  // Part II keyed by question.id -> { a: boolean | undefined, b: boolean | undefined, c: boolean | undefined, d: boolean | undefined }
+  part2: Record<string, Record<'a' | 'b' | 'c' | 'd', boolean | undefined>>;
+  // Part III keyed by question.id -> numeric string
+  part3: Record<string, string>;
+  // Flagged questions keyed by global matrix number (1..28)
+  flagged: Record<number, boolean>;
+}
+
+export interface SavedExamSession {
+  studentName: string;
+  studentId: string; // SBD
+  examCode: string;
+  startedAt: string;
+  lastSavedAt: string;
+  remainingSeconds: number;
+  isSubmitted: boolean;
+  submittedAt?: string;
+  answers: StudentAnswersState;
   violations: ViolationEvent[];
-  submissionReason: 'student_submitted' | 'violation_limit_exceeded' | 'time_expired';
-  isFullscreenRequired: boolean;
-  copyProtectionEnabled: boolean;
-  totalTabExits: number;
+  finalScore?: number;
 }
 
-export interface AntiCheatConfig {
-  enabled: boolean;
-  requireFullscreen: boolean;
-  trackTabSwitching: boolean;
-  maxViolations: number;
-  preventCopyAndShortcuts: boolean;
-}
-
-export interface QuestionGradingResult {
+export interface QuestionGradeDetail {
+  globalNumber: number;
+  part: 'I' | 'II' | 'III';
+  partQuestionNumber: number;
   questionId: string;
-  part: 'Phần I' | 'Phần II' | 'Phần III';
   earnedPoints: number;
   maxPoints: number;
-  isCorrect: boolean;
-  isPartiallyCorrect?: boolean;
+  status: 'CORRECT' | 'PARTIAL' | 'INCORRECT' | 'UNANSWERED';
   userAnswerSummary: string;
   correctAnswerSummary: string;
-  detail: any;
+  subDetails?: {
+    label: 'a' | 'b' | 'c' | 'd';
+    text: string;
+    userChoice?: boolean;
+    correctChoice: boolean;
+    isCorrect: boolean;
+  }[];
+  explanation: string;
+  questionText: string;
+  has_image?: boolean;
+  image_url?: string;
 }
 
-export interface ExamEvaluation {
-  totalScore: number;
-  maxScore: number;
-  percentage: number;
-  timeSpentSeconds: number;
-  partScores: {
-    [part: string]: { earned: number; max: number; percentage: number };
-  };
-  topicScores: {
-    [topic: string]: { earned: number; max: number; percentage: number };
-  };
-  results: { [questionId: string]: QuestionGradingResult };
-  submittedAt: string;
-  auditLog?: ExamAuditLog;
+export interface ExamGradeReport {
+  rawTotalScore: number;
+  maxPossibleScore: number;
+  scaled10Score: number;
+  part1Score: number;
+  part1Max: number;
+  part1CorrectCount: number;
+  part2Score: number;
+  part2Max: number;
+  part2FullCorrectCount: number;
+  part3Score: number;
+  part3Max: number;
+  part3CorrectCount: number;
+  answeredCount: number;
+  totalQuestionCount: number;
+  details: QuestionGradeDetail[];
 }
 
-export interface StudentSubmission {
-  id: string;
+export interface WorkstationNode {
+  workstationId: string; // e.g., "MAY-01"
+  ipAddress: string;
   studentName: string;
-  studentClass: string;
-  candidateNumber: string;
-  examTitle: string;
+  studentId: string; // SBD
   examCode: string;
-  totalScore: number;
-  maxScore: number;
-  percentage: number;
-  timeSpentSeconds: number;
-  submittedAt: string;
-  submissionReason: 'student_submitted' | 'violation_limit_exceeded' | 'time_expired';
+  status: 'ACTIVE' | 'SUBMITTED' | 'VIOLATION_WARN' | 'DISCONNECTED';
+  answeredCount: number;
+  totalQuestions: number;
+  remainingSeconds: number;
   violationCount: number;
-  auditLog: ExamAuditLog;
-  evaluation: ExamEvaluation;
-  answers: StudentAnswers;
+  lastEventText: string;
+  score?: number;
+  isLiveBrowserUser?: boolean;
 }
+
+export type ViolationEnforcementLevel = 1 | 2 | 3; // Mức 1: 1 lần, Mức 2: 3 lần, Mức 3: 4 lần
+
+export interface OnlineExamAssignment {
+  id: string;
+  examCode: string;
+  examLink: string;
+  examTitle: string;
+  subject: string;
+  assignedClasses: string[];
+  startTime: string; // YYYY-MM-DDTHH:mm
+  endTime: string;   // YYYY-MM-DDTHH:mm
+  durationMinutes: number;
+  mode: 'exam' | 'practice'; // 'exam' = Chế độ kiểm tra (thu bài cưỡng chế), 'practice' = Chế độ ôn tập (không thu bài cưỡng chế)
+  violationLevel: ViolationEnforcementLevel; // 1 -> 1 lần, 2 -> 3 lần, 3 -> 4 lần
+  maxViolations: number; // 1 | 3 | 4 (or 0 when mode === 'practice')
+  sourceMode: 'bank' | 'upload_with_solution';
+  sourceBankExamId?: string;
+  detailedSolutionFileName?: string;
+  detailedSolutionContent?: string;
+  examData: ExamData;
+  createdAt: string;
+}
+

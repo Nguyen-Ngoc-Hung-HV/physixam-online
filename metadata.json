@@ -1,7 +1,6 @@
 {
-  "name": "PhysiXam - Khảo thí Vật lí THPT Trực tuyến",
-  "description": "Nền tảng thi thử và kiểm tra trực tuyến môn Vật lí THPT toàn diện, hỗ trợ hiển thị công thức KaTeX, đồ thị vector SVG và chấm điểm tự động.",
+  "name": "SmartTest Physics GDPT 2018",
+  "description": "Comprehensive examination management, test scrambling, and secure computer-lab testing system for Vietnam National High School Physics (GDPT 2018 curriculum).",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
-
