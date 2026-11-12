@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { KeyRound, Moon, Shuffle, Sun, Type } from 'lucide-react';
 import {
   ExamData,
   OnlineExamAssignment,
@@ -24,15 +24,22 @@ import { LandingPage } from './components/LandingPage';
 import { TeacherPortal } from './components/TeacherPortal';
 import { StudentExamEnvironment } from './components/StudentExamEnvironment';
 import { StatisticsPortal } from './components/StatisticsPortal';
+import { AdminPinModal } from './components/AdminPinModal';
 import {
+  fetchExamFromCloud,
+  fetchLatestExamsFromCloud,
   fetchSubmissionsByExam,
   importExamToCloud,
+  normalizeCloudExamRecord,
   submitExamToCloud,
   syncOnlineAssignmentToCloud,
 } from './services/api';
 
 const THEME_STORAGE_KEY = 'smarttest_gdpt2018_theme';
+const FONT_SIZE_STORAGE_KEY = 'smarttest_gdpt2018_font_size';
 const ONLINE_ASSIGNMENTS_STORAGE_KEY = 'smarttest_gdpt2018_online_assignments_v1';
+const ADMIN_PIN_STORAGE_KEY = 'smarttest_gdpt2018_admin_pin_v1';
+const DEFAULT_ADMIN_SIX_DIGIT_PIN = '123456';
 
 export default function App() {
   // Dual-Theme Switcher: 'dark' ("Tím Than") | 'light' ("Nền Trắng")
@@ -63,9 +70,79 @@ export default function App() {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   }, []);
 
-  // Top-level 4-view hierarchy: 'home' | 'teacher' | 'student' | 'statistics'
-  const [currentView, setCurrentView] = useState<'home' | 'teacher' | 'student' | 'statistics'>('home');
+  // Dual Font-Size Switcher: 'normal' (Cỡ chữ hiện tại) | 'large' (Cỡ chữ lớn hơn) — No password required
+  const [fontSizeMode, setFontSizeMode] = useState<'normal' | 'large'>(() => {
+    try {
+      const saved = localStorage.getItem(FONT_SIZE_STORAGE_KEY);
+      if (saved === 'large' || saved === 'normal') return saved;
+    } catch {
+      // Fallback to normal
+    }
+    return 'normal';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FONT_SIZE_STORAGE_KEY, fontSizeMode);
+    } catch {
+      // Ignore storage error
+    }
+    if (fontSizeMode === 'large') {
+      document.documentElement.classList.add('font-size-large');
+      document.body.classList.add('font-size-large');
+    } else {
+      document.documentElement.classList.remove('font-size-large');
+      document.body.classList.remove('font-size-large');
+    }
+  }, [fontSizeMode]);
+
+  const toggleFontSizeMode = useCallback(() => {
+    setFontSizeMode((prev) => (prev === 'normal' ? 'large' : 'normal'));
+  }, []);
+
+  // Top-level view hierarchy: 'home' | 'scrambler' | 'teacher' | 'student' | 'statistics'
+  const [currentView, setCurrentView] = useState<'home' | 'scrambler' | 'teacher' | 'student' | 'statistics'>('home');
   const [teacherSubTab, setTeacherSubTab] = useState<'bank' | 'scrambler' | 'monitor' | 'online_exam'>('bank');
+
+  // 6-Digit Admin Password Protection State (Default: 123456, changeable by Network Admin)
+  const [adminPin, setAdminPin] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(ADMIN_PIN_STORAGE_KEY);
+      if (saved && /^\d{6}$/.test(saved)) return saved;
+    } catch {
+      // Fallback to default 6-digit PIN
+    }
+    return DEFAULT_ADMIN_SIX_DIGIT_PIN;
+  });
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
+  const [adminModalOpen, setAdminModalOpen] = useState<boolean>(false);
+  const [adminModalMode, setAdminModalMode] = useState<'verify' | 'change'>('verify');
+  const [adminTargetFeatureLabel, setAdminTargetFeatureLabel] = useState<string>('');
+  const pendingAdminActionRef = useRef<(() => void) | null>(null);
+
+  const requestAdminAuthentication = useCallback(
+    (featureLabel: string, onAuthorized: () => void) => {
+      if (isAdminAuthenticated) {
+        onAuthorized();
+        return;
+      }
+      pendingAdminActionRef.current = onAuthorized;
+      setAdminTargetFeatureLabel(featureLabel);
+      setAdminModalMode('verify');
+      setAdminModalOpen(true);
+    },
+    [isAdminAuthenticated]
+  );
+
+  const handleChangeAdminPin = useCallback((newPin: string) => {
+    if (!/^\d{6}$/.test(newPin)) return;
+    setAdminPin(newPin);
+    try {
+      localStorage.setItem(ADMIN_PIN_STORAGE_KEY, newPin);
+    } catch {
+      // Ignore storage error
+    }
+  }, []);
 
   // Exam Bank & Scrambled Variants State (preserved across all view transitions)
   const [examData, setExamData] = useState<ExamData>(FULL_MOET_28_PHYSICS_EXAM);
@@ -112,19 +189,97 @@ export default function App() {
     ];
   });
 
-  // Automatically open Student Portal if examCode query parameter is present in URL
+  // Helper to apply a normalized cloud exam record from MongoDB Atlas into global state
+  const applyNormalizedCloudExam = useCallback(
+    (
+      normalized: {
+        examData: ExamData;
+        variants: ScrambledExamVariant[];
+        assignment: OnlineExamAssignment;
+      }
+    ) => {
+      setExamData(normalized.examData);
+      setVariants((prev) => {
+        const cloudCodes = new Set(
+          normalized.variants.map((v) => v.code.trim().toUpperCase())
+        );
+        const others = prev.filter(
+          (v) => !cloudCodes.has(v.code.trim().toUpperCase())
+        );
+        return [...normalized.variants, ...others];
+      });
+      setOnlineAssignments((prev) => {
+        const filtered = prev.filter(
+          (a) =>
+            a.examCode.trim().toUpperCase() !==
+            normalized.assignment.examCode.trim().toUpperCase()
+        );
+        const nextList = [normalized.assignment, ...filtered];
+        try {
+          localStorage.setItem(ONLINE_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(nextList));
+        } catch {
+          // Ignore storage error
+        }
+        return nextList;
+      });
+    },
+    []
+  );
+
+  // Automatically open Student Portal if examCode query parameter is present in URL,
+  // and hydrate the latest assigned exam(s) from MongoDB Atlas / Server Cloud
   useEffect(() => {
+    let urlCode = '';
     try {
       const params = new URLSearchParams(window.location.search);
-      const urlCode = params.get('examCode');
-      if (urlCode && urlCode.trim()) {
-        setStudentTargetCode(urlCode.trim());
+      const rawCode = params.get('examCode');
+      if (rawCode && rawCode.trim()) {
+        urlCode = rawCode.trim();
+        setStudentTargetCode(urlCode);
         setCurrentView('student');
       }
     } catch {
       // Ignore URL parse error
     }
-  }, []);
+
+    // 1. Fetch latest exams from MongoDB Atlas (/api/exams)
+    fetchLatestExamsFromCloud()
+      .then((res) => {
+        if (res.success && Array.isArray(res.exams) && res.exams.length > 0) {
+          // Apply all cloud exams in reverse order so the newest one (index 0) is primary
+          for (let i = res.exams.length - 1; i >= 0; i -= 1) {
+            const norm = normalizeCloudExamRecord(res.exams[i]);
+            if (norm) {
+              applyNormalizedCloudExam(norm);
+            }
+          }
+        } else if (res.success && res.latestExam) {
+          const norm = normalizeCloudExamRecord(res.latestExam, urlCode || undefined);
+          if (norm) {
+            applyNormalizedCloudExam(norm);
+          }
+        }
+      })
+      .catch(() => {
+        // Fallback to local state
+      });
+
+    // 2. If a specific examCode was passed in URL, also fetch that exact examCode from MongoDB Atlas
+    if (urlCode) {
+      fetchExamFromCloud(urlCode)
+        .then((res) => {
+          if (res.success && res.exam) {
+            const norm = normalizeCloudExamRecord(res.exam, urlCode);
+            if (norm) {
+              applyNormalizedCloudExam(norm);
+            }
+          }
+        })
+        .catch(() => {
+          // Ignore error
+        });
+    }
+  }, [applyNormalizedCloudExam]);
 
   // Simulated LAN Workstations + Live Browser Student Session Sync
   const [workstations, setWorkstations] = useState<WorkstationNode[]>(
@@ -369,16 +524,36 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
+  const handleNavigateQuickScrambler = useCallback(() => {
+    setTeacherSubTab('scrambler');
+    setCurrentView('scrambler');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
   const handleNavigateTeacher = useCallback(
     (subTab?: 'bank' | 'scrambler' | 'monitor' | 'online_exam') => {
-      if (subTab) {
-        setTeacherSubTab(subTab);
+      // Guests/students are allowed to use the Scrambler & Exporter without a password
+      if (subTab === 'scrambler' && !isAdminAuthenticated) {
+        handleNavigateQuickScrambler();
+        return;
       }
-      setCurrentView('teacher');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      requestAdminAuthentication('Cổng Quản Trị Giáo Viên', () => {
+        if (subTab) {
+          setTeacherSubTab(subTab);
+        }
+        setCurrentView('teacher');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
     },
-    []
+    [isAdminAuthenticated, handleNavigateQuickScrambler, requestAdminAuthentication]
   );
+
+  const handleNavigateStatistics = useCallback(() => {
+    requestAdminAuthentication('Thống Kê Điểm & Báo Cáo', () => {
+      setCurrentView('statistics');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  }, [requestAdminAuthentication]);
 
   const handleScrollToFeatures = useCallback(() => {
     if (currentView !== 'home') {
@@ -475,16 +650,16 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen flex flex-col transition-colors duration-200 ${
+      className={`min-h-screen w-full max-w-full overflow-x-hidden flex flex-col transition-colors duration-200 ${
         theme === 'light'
           ? 'theme-light bg-slate-50 text-slate-900'
           : 'bg-[#0b0f19] text-slate-100'
       }`}
     >
       {/* Persistent Top Navigation Bar */}
-      <header className="sticky top-0 z-40 flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-5 py-2.5 bg-[#0b0f19]/95 backdrop-blur border-b border-indigo-950/90 no-print">
+      <header className="sticky top-0 z-40 w-full max-w-full overflow-x-hidden flex items-center justify-between gap-1.5 sm:gap-3 px-2 sm:px-5 py-2 sm:py-2.5 bg-[#0b0f19]/95 backdrop-blur border-b border-indigo-950/90 no-print">
         {/* Zone 1: Prominent Exam/Assessment Emblem Icon & Theme Switcher */}
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 min-w-0">
           <a
             href="#top"
             onClick={(e) => {
@@ -494,16 +669,16 @@ export default function App() {
             }}
             title="Hệ Thống Khảo Thí & Kiểm Tra Đánh Giá Thông Minh (Đa Môn Học)"
             aria-label="Trang chủ Hệ thống Khảo thí & Kiểm tra"
-            className="group relative flex items-center gap-2 p-1 rounded-xl transition-transform hover:scale-105 focus:outline-none shrink-0"
+            className="group relative flex items-center gap-2 p-0.5 sm:p-1 rounded-xl transition-transform hover:scale-105 focus:outline-none shrink-0"
           >
             {/* Standout Exam & Assessment Crest Emblem (SVG) */}
-            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600 via-indigo-600 to-blue-600 p-0.5 shadow-md shadow-violet-600/30 ring-1 ring-white/25 group-hover:ring-violet-300 transition-all">
+            <div className="relative flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-violet-600 via-indigo-600 to-blue-600 p-0.5 shadow-md shadow-violet-600/30 ring-1 ring-white/25 group-hover:ring-violet-300 transition-all">
               <div className="w-full h-full rounded-[10px] bg-slate-950/25 flex items-center justify-center">
                 <svg
                   viewBox="0 0 40 40"
                   fill="none"
                   xmlns="http://www.w3.org/2000/svg"
-                  className="w-7 h-7"
+                  className="w-6 h-6 sm:w-7 sm:h-7"
                 >
                   {/* Exam Clipboard / Test Sheet */}
                   <rect
@@ -557,10 +732,10 @@ export default function App() {
                 : 'Chuyển sang giao diện Tím Than (Dark Theme)'
             }
             aria-label="Chuyển đổi giao diện Sáng / Tối"
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs sm:text-sm font-semibold transition-all whitespace-nowrap shrink-0 ${
+            className={`inline-flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
               theme === 'dark'
-                ? 'bg-indigo-950/80 hover:bg-indigo-900 border-violet-700/70 text-violet-200'
-                : 'bg-violet-50 hover:bg-violet-100 border-violet-300 text-violet-800 shadow-xs'
+                ? 'bg-indigo-950/80 hover:bg-indigo-900 border-violet-700/70 text-violet-100'
+                : 'bg-violet-50 hover:bg-violet-100 border-violet-300 text-violet-900 shadow-xs'
             }`}
           >
             {theme === 'dark' ? (
@@ -575,19 +750,55 @@ export default function App() {
               </>
             )}
           </button>
+
+          {/* Dual Font-Size Switcher Button (Cỡ chữ hiện tại vs. Cỡ chữ lớn hơn) */}
+          <button
+            type="button"
+            onClick={toggleFontSizeMode}
+            title={
+              fontSizeMode === 'normal'
+                ? 'Chuyển sang chế độ Cỡ chữ lớn hơn'
+                : 'Chuyển về chế độ Cỡ chữ mặc định'
+            }
+            aria-label="Chuyển đổi cỡ chữ hệ thống"
+            className={`inline-flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
+              fontSizeMode === 'large'
+                ? 'bg-violet-600 hover:bg-violet-500 border-violet-400 text-white shadow-xs'
+                : theme === 'dark'
+                ? 'bg-indigo-950/80 hover:bg-indigo-900 border-violet-700/70 text-violet-100'
+                : 'bg-violet-50 hover:bg-violet-100 border-violet-300 text-violet-900 shadow-xs'
+            }`}
+          >
+            <Type className="w-3.5 h-3.5 shrink-0" />
+            <span>Cỡ Chữ</span>
+          </button>
+
+          {/* Mobile Quick "Trộn Đề" Button (visible on mobile where center nav is hidden) */}
+          <button
+            type="button"
+            onClick={handleNavigateQuickScrambler}
+            className={`md:hidden inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border text-[11px] font-bold transition-all whitespace-nowrap shrink-0 ${
+              currentView === 'scrambler'
+                ? 'bg-violet-600 border-violet-400 text-white'
+                : 'bg-indigo-950/80 hover:bg-indigo-900 border-violet-700/70 text-violet-100'
+            }`}
+          >
+            <Shuffle className="w-3 h-3 shrink-0" />
+            <span>Trộn Đề</span>
+          </button>
         </div>
 
-        {/* Zone 2: Quick Navigation Links */}
-        <nav className="hidden md:flex items-center gap-3.5 lg:gap-5 text-sm font-medium text-slate-300">
+        {/* Zone 2: Quick Navigation Links (Bold Typography + Quick Scrambler Button) */}
+        <nav className="hidden md:flex items-center gap-3.5 lg:gap-5 text-sm font-bold text-slate-100">
           <button
             type="button"
             onClick={() => {
               setCurrentView('home');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+            className={`font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
               currentView === 'home'
-                ? 'text-violet-400 border-b-2 border-violet-400 font-semibold'
+                ? 'text-violet-400 border-b-2 border-violet-400'
                 : ''
             }`}
           >
@@ -596,10 +807,23 @@ export default function App() {
 
           <button
             type="button"
+            onClick={handleNavigateQuickScrambler}
+            className={`inline-flex items-center gap-1.5 font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+              currentView === 'scrambler'
+                ? 'text-violet-400 border-b-2 border-violet-400'
+                : ''
+            }`}
+          >
+            <Shuffle className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+            <span>Trộn Đề</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => handleNavigateTeacher()}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+            className={`font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
               currentView === 'teacher'
-                ? 'text-violet-400 border-b-2 border-violet-400 font-semibold'
+                ? 'text-violet-400 border-b-2 border-violet-400'
                 : ''
             }`}
           >
@@ -609,9 +833,9 @@ export default function App() {
           <button
             type="button"
             onClick={() => handleLaunchStudentWithCode()}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+            className={`font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
               currentView === 'student'
-                ? 'text-emerald-400 border-b-2 border-emerald-400 font-semibold'
+                ? 'text-emerald-400 border-b-2 border-emerald-400'
                 : ''
             }`}
           >
@@ -620,13 +844,10 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => {
-              setCurrentView('statistics');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
+            onClick={handleNavigateStatistics}
+            className={`font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
               currentView === 'statistics'
-                ? 'text-amber-400 border-b-2 border-amber-400 font-semibold'
+                ? 'text-amber-400 border-b-2 border-amber-400'
                 : ''
             }`}
           >
@@ -636,38 +857,74 @@ export default function App() {
           <button
             type="button"
             onClick={handleScrollToFeatures}
-            className="hover:text-white transition-colors whitespace-nowrap shrink-0 py-1"
+            className="font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1"
           >
             Giới Thiệu Tính Năng
           </button>
         </nav>
 
         {/* Zone 3: Role Switcher Action Buttons */}
-        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => handleNavigateTeacher()}
-            className={`px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-xl border transition-colors whitespace-nowrap shrink-0 ${
-              currentView === 'teacher'
-                ? 'bg-indigo-900/90 border-violet-400 text-white'
-                : 'bg-indigo-950/60 hover:bg-indigo-900/70 border-indigo-700/80 text-indigo-200'
-            }`}
-          >
-            Đăng Nhập Quản Trị
-          </button>
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          {currentView === 'teacher' && (
+            <button
+              type="button"
+              onClick={() => {
+                setAdminTargetFeatureLabel('Cài Đặt Mật Khẩu Quản Trị (6 Số)');
+                setAdminModalMode('change');
+                setAdminModalOpen(true);
+              }}
+              title="Đổi mật khẩu 6 số hoặc khóa quyền Quản trị"
+              className="inline-flex items-center gap-1.5 px-2 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-xl border bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/70 text-emerald-200 transition-colors whitespace-nowrap shrink-0"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>Quản Trị</span>
+            </button>
+          )}
 
           <button
             type="button"
             onClick={() => handleLaunchStudentWithCode()}
-            className="px-3.5 py-2 text-xs sm:text-sm font-bold rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-colors whitespace-nowrap shrink-0 shadow-xs"
+            className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-colors whitespace-nowrap shrink-0 shadow-xs"
           >
             Vào Phòng Thi Thí Sinh
           </button>
         </div>
       </header>
 
-      {/* Main Content Area — Preserving state across 'home' | 'teacher' | 'student' | 'statistics' */}
-      <main className="flex-1">
+      {/* 6-Digit Admin Password Verification & Change Password Modal */}
+      <AdminPinModal
+        isOpen={adminModalOpen}
+        initialMode={adminModalMode}
+        currentPin={adminPin}
+        isAdminAuthenticated={isAdminAuthenticated}
+        targetFeatureLabel={adminTargetFeatureLabel}
+        onClose={() => {
+          setAdminModalOpen(false);
+          pendingAdminActionRef.current = null;
+        }}
+        onSuccessVerify={() => {
+          setIsAdminAuthenticated(true);
+          setAdminModalOpen(false);
+          const pending = pendingAdminActionRef.current;
+          pendingAdminActionRef.current = null;
+          if (pending) {
+            pending();
+          } else {
+            setCurrentView('teacher');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }
+        }}
+        onChangePin={handleChangeAdminPin}
+        onLogoutAdmin={() => {
+          setIsAdminAuthenticated(false);
+          if (currentView === 'teacher' || currentView === 'statistics') {
+            setCurrentView('home');
+          }
+        }}
+      />
+
+      {/* Main Content Area — Preserving state across 'home' | 'scrambler' | 'teacher' | 'student' | 'statistics' */}
+      <main className="flex-1 w-full max-w-full overflow-x-hidden">
         {currentView === 'home' && (
           <LandingPage
             examData={examData}
@@ -676,13 +933,16 @@ export default function App() {
             onNavigateTeacher={handleNavigateTeacher}
             onNavigateStudent={handleLaunchStudentWithCode}
             onResetSystemCache={handleResetSystemCache}
+            isAdminAuthenticated={isAdminAuthenticated}
+            onRequestAdminAuth={requestAdminAuthentication}
           />
         )}
 
-        {currentView === 'teacher' && (
+        {(currentView === 'scrambler' || (currentView === 'teacher' && isAdminAuthenticated)) && (
           <TeacherPortal
-            activeSubTab={teacherSubTab}
+            activeSubTab={currentView === 'scrambler' ? 'scrambler' : teacherSubTab}
             setActiveSubTab={setTeacherSubTab}
+            isStandaloneScrambler={currentView === 'scrambler'}
             examData={examData}
             onUpdateExamData={handleUpdateExamData}
             variants={variants}
@@ -708,10 +968,11 @@ export default function App() {
             initialExamCode={studentTargetCode}
             onSessionUpdate={handleStudentSessionUpdate}
             onlineAssignments={onlineAssignments}
+            onCloudExamLoaded={applyNormalizedCloudExam}
           />
         )}
 
-        {currentView === 'statistics' && (
+        {currentView === 'statistics' && isAdminAuthenticated && (
           <StatisticsPortal
             examData={examData}
             variants={variants}
@@ -748,6 +1009,13 @@ export default function App() {
             </button>
             <button
               type="button"
+              onClick={handleNavigateQuickScrambler}
+              className="hover:text-white transition-colors whitespace-nowrap"
+            >
+              Trộn Đề
+            </button>
+            <button
+              type="button"
               onClick={() => handleNavigateTeacher('bank')}
               className="hover:text-white transition-colors whitespace-nowrap"
             >
@@ -762,17 +1030,19 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                setCurrentView('statistics');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
+              onClick={handleNavigateStatistics}
               className="hover:text-white transition-colors whitespace-nowrap"
             >
               Thống Kê Điểm
             </button>
             <button
               type="button"
-              onClick={handleResetSystemCache}
+              onClick={() =>
+                requestAdminAuthentication(
+                  'Xoá Bộ Nhớ Đệm Hệ Thống (Reset Cache)',
+                  handleResetSystemCache
+                )
+              }
               className="text-rose-400 hover:text-rose-300 font-mono transition-colors whitespace-nowrap"
             >
               Reset Cache

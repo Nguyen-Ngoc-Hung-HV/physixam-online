@@ -4,6 +4,7 @@ import {
   SavedExamSession,
   ScrambledExamVariant,
 } from '../types/exam';
+import { generateMultipleVariants } from '../utils/scramblerAndGrader';
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || '';
 const LOCAL_EXAMS_BACKUP_KEY = 'smarttest_gdpt2018_cloud_exams_backup_v1';
@@ -12,6 +13,9 @@ const LOCAL_SESSION_PREFIX = 'smarttest_gdpt2018_session_';
 export interface CloudExamImportPayload {
   examId?: string;
   examCode?: string;
+  examTitle?: string;
+  subject?: string;
+  durationMinutes?: number;
   examData: ExamData;
   variants?: ScrambledExamVariant[];
   folderId?: string;
@@ -39,6 +43,157 @@ export interface CloudSubmissionResponse {
 }
 
 /**
+ * Helper to normalize a raw cloud exam document from MongoDB Atlas into
+ * { examData, variants, assignment } so any student device immediately gets the real questions.
+ */
+export function normalizeCloudExamRecord(
+  doc: Record<string, any> | null | undefined,
+  requestedCode?: string
+): {
+  examData: ExamData;
+  variants: ScrambledExamVariant[];
+  assignment: OnlineExamAssignment;
+} | null {
+  if (!doc) return null;
+
+  const rawPart1 = Array.isArray(doc.part1)
+    ? doc.part1
+    : Array.isArray(doc.examData?.part1)
+    ? doc.examData.part1
+    : [];
+  const rawPart2 = Array.isArray(doc.part2)
+    ? doc.part2
+    : Array.isArray(doc.examData?.part2)
+    ? doc.examData.part2
+    : [];
+  const rawPart3 = Array.isArray(doc.part3)
+    ? doc.part3
+    : Array.isArray(doc.examData?.part3)
+    ? doc.examData.part3
+    : [];
+
+  const rawVariants: ScrambledExamVariant[] = Array.isArray(doc.variants)
+    ? doc.variants
+    : [];
+
+  // If part1/2/3 are empty on top-level but variants[0] has questions, recover from variants[0]
+  const fallbackVariant = rawVariants[0];
+  const hasTopLevelQuestions =
+    rawPart1.length + rawPart2.length + rawPart3.length > 0;
+  const hasVariantQuestions =
+    fallbackVariant &&
+    (fallbackVariant.part1?.length || 0) +
+      (fallbackVariant.part2?.length || 0) +
+      (fallbackVariant.part3?.length || 0) >
+      0;
+
+  if (!hasTopLevelQuestions && !hasVariantQuestions) {
+    return null;
+  }
+
+  const resolvedCode = String(
+    requestedCode?.trim() || doc.examCode || fallbackVariant?.code || '1102'
+  ).trim();
+  const resolvedExamId = String(
+    doc.examId || doc.examData?.examId || `CLOUD-${resolvedCode}`
+  ).trim();
+  const resolvedTitle = String(
+    doc.title ||
+      doc.examTitle ||
+      doc.examData?.title ||
+      fallbackVariant?.title ||
+      'Kiểm Tra Thông Minh - Chuẩn Cấu Trúc GDPT 2018'
+  );
+  const resolvedSubject = String(
+    doc.subject || doc.examData?.subject || fallbackVariant?.subject || 'Vật Lý 12'
+  );
+  const resolvedDuration =
+    Number(
+      doc.durationMinutes ||
+        doc.examData?.durationMinutes ||
+        fallbackVariant?.durationMinutes
+    ) || 50;
+
+  const examData: ExamData = {
+    examId: resolvedExamId,
+    title: resolvedTitle,
+    subject: resolvedSubject,
+    grade: doc.grade || doc.examData?.grade || 'Lớp 12',
+    curriculum:
+      doc.curriculum ||
+      doc.examData?.curriculum ||
+      'Chương trình GDPT 2018 — Bộ GD&ĐT',
+    durationMinutes: resolvedDuration,
+    part1: hasTopLevelQuestions ? rawPart1 : fallbackVariant.part1 || [],
+    part2: hasTopLevelQuestions ? rawPart2 : fallbackVariant.part2 || [],
+    part3: hasTopLevelQuestions ? rawPart3 : fallbackVariant.part3 || [],
+  };
+
+  let variants: ScrambledExamVariant[] = rawVariants.filter(
+    (v) =>
+      v &&
+      Array.isArray(v.part1) &&
+      v.part1.length + (v.part2?.length || 0) + (v.part3?.length || 0) > 0
+  );
+
+  const hasRequestedVariant = variants.some(
+    (v) => v.code.trim().toUpperCase() === resolvedCode.toUpperCase()
+  );
+
+  if (!hasRequestedVariant) {
+    const generated = generateMultipleVariants(
+      examData,
+      [resolvedCode],
+      `CLOUD-SYNC-${resolvedCode}`
+    );
+    variants = [...generated, ...variants];
+  }
+
+  if (variants.length === 0) {
+    variants = generateMultipleVariants(
+      examData,
+      [resolvedCode, '1102', '1104', '1106', '1108'],
+      `CLOUD-INIT-${resolvedCode}`
+    );
+  }
+
+  const origin =
+    typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://smarttest.edu.vn';
+
+  const assignment: OnlineExamAssignment = {
+    id: `ONLINE-ASSIGN-${resolvedCode.toUpperCase()}`,
+    examCode: resolvedCode,
+    examLink: `${origin}/?examCode=${encodeURIComponent(resolvedCode)}`,
+    examTitle: resolvedTitle,
+    subject: resolvedSubject,
+    assignedClasses: Array.isArray(doc.assignedClasses)
+      ? doc.assignedClasses
+      : ['12A1', '12A2'],
+    startTime: doc.startTime || '',
+    endTime: doc.endTime || '',
+    durationMinutes: resolvedDuration,
+    mode: doc.mode === 'practice' ? 'practice' : 'exam',
+    violationLevel: (doc.violationLevel as 1 | 2 | 3) || 2,
+    maxViolations:
+      typeof doc.maxViolations === 'number'
+        ? doc.maxViolations
+        : doc.mode === 'practice'
+        ? 0
+        : 3,
+    sourceMode: 'bank',
+    detailedSolutionContent: doc.detailedSolutionContent || undefined,
+    examData,
+    createdAt: doc.updatedAt
+      ? new Date(doc.updatedAt).toLocaleString('vi-VN')
+      : new Date().toLocaleString('vi-VN'),
+  };
+
+  return { examData, variants, assignment };
+}
+
+/**
  * 1. POST /api/exams/import
  * Save newly imported, scrambled, or published online exams to MongoDB Atlas
  * with automatic localStorage backup if network disconnects.
@@ -55,6 +210,7 @@ export async function importExamToCloud(
     const map = raw ? (JSON.parse(raw) as Record<string, any>) : {};
     map[examCode.toUpperCase()] = { ...payload, examId, examCode };
     map[examId.toUpperCase()] = { ...payload, examId, examCode };
+    map.LATEST = { ...payload, examId, examCode };
     localStorage.setItem(LOCAL_EXAMS_BACKUP_KEY, JSON.stringify(map));
   } catch {
     // Ignore local storage quota errors
@@ -87,6 +243,63 @@ export async function importExamToCloud(
         examCode,
         variants: payload.variants || [],
       },
+    };
+  }
+}
+
+/**
+ * 1b. GET /api/exams
+ * Retrieve latest exams assigned by the teacher from MongoDB Atlas so student phones/workstations
+ * automatically sync on startup.
+ */
+export async function fetchLatestExamsFromCloud(): Promise<{
+  success: boolean;
+  storage: string;
+  latestExam: any | null;
+  exams: any[];
+}> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/exams`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const exams = Array.isArray(data.exams) ? data.exams : [];
+    const latestExam = data.latestExam || exams[0] || null;
+    return {
+      success: true,
+      storage: data.storage || 'mongodb_atlas',
+      latestExam,
+      exams,
+    };
+  } catch {
+    try {
+      const raw = localStorage.getItem(LOCAL_EXAMS_BACKUP_KEY);
+      if (raw) {
+        const map = JSON.parse(raw) as Record<string, any>;
+        const latest = map.LATEST || Object.values(map)[0] || null;
+        if (latest) {
+          return {
+            success: true,
+            storage: 'local_storage_fallback',
+            latestExam: latest,
+            exams: Object.values(map),
+          };
+        }
+      }
+    } catch {
+      // Ignore parse error
+    }
+    return {
+      success: false,
+      storage: 'local_storage_fallback',
+      latestExam: null,
+      exams: [],
     };
   }
 }
@@ -129,12 +342,12 @@ export async function fetchExamFromCloud(
       const raw = localStorage.getItem(LOCAL_EXAMS_BACKUP_KEY);
       if (raw) {
         const map = JSON.parse(raw) as Record<string, any>;
-        const found = map[cleanId.toUpperCase()] || null;
+        const found = map[cleanId.toUpperCase()] || map.LATEST || null;
         if (found) {
           return {
             success: true,
             storage: 'local_storage_fallback',
-            exam: found.examData || found,
+            exam: found.examData ? { ...found.examData, ...found } : found,
           };
         }
       }
@@ -311,6 +524,9 @@ export async function syncOnlineAssignmentToCloud(
   return importExamToCloud({
     examId: assignment.examData.examId,
     examCode: assignment.examCode,
+    examTitle: assignment.examTitle || assignment.examData.title,
+    subject: assignment.subject || assignment.examData.subject,
+    durationMinutes: assignment.durationMinutes || assignment.examData.durationMinutes,
     examData: assignment.examData,
     variants,
     mode: assignment.mode,

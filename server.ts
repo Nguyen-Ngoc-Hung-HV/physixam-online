@@ -289,10 +289,14 @@ function calculateMoetServerScore(
 
   const rawTotalScore = Number((part1Score + part2Score + part3Score).toFixed(2));
   const maxPossibleScore = Number((part1Max + part2Max + part3Max).toFixed(2)) || 10;
-  const totalMoetScore =
+  const computedMoetScore =
     maxPossibleScore > 0
       ? Number(((rawTotalScore / maxPossibleScore) * 10).toFixed(2))
       : 0;
+  const totalMoetScore =
+    typeof fallbackClientScore === 'number' && !Number.isNaN(fallbackClientScore)
+      ? Number(fallbackClientScore.toFixed(2))
+      : computedMoetScore;
 
   return {
     part1Score: Number(part1Score.toFixed(2)),
@@ -322,25 +326,30 @@ async function startServer() {
     });
   });
 
+  // Helper to escape special regex characters in exam codes like "12.DGNL.01"
+  const escapeRegex = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
   // 1. POST /api/exams/import
   app.post('/api/exams/import', async (req: Request, res: Response) => {
     try {
       const body = req.body || {};
       const examData = body.examData || body;
-      const examId = String(examData.examId || body.examId || `EXAM-${Date.now()}`).trim();
       const examCode = String(body.examCode || examData.examCode || '1102').trim();
+      const examId = String(
+        examData.examId || body.examId || `EXAM-${examCode}-${Date.now()}`
+      ).trim();
 
       const payload = {
         examId,
         examCode,
         title:
-          examData.title ||
           body.examTitle ||
+          examData.title ||
           'Kiểm Tra Thông Minh - Chuẩn Cấu Trúc GDPT 2018',
-        subject: examData.subject || body.subject || 'Vật Lý 12',
+        subject: body.subject || examData.subject || 'Vật Lý 12',
         grade: examData.grade || 'Lớp 12',
         curriculum: examData.curriculum || 'Chương trình GDPT 2018 — Bộ GD&ĐT',
-        durationMinutes: Number(examData.durationMinutes || body.durationMinutes) || 50,
+        durationMinutes: Number(body.durationMinutes || examData.durationMinutes) || 50,
         folderId: body.folderId || 'KTGHK',
         mode: body.mode || 'exam',
         violationLevel: body.violationLevel || 2,
@@ -358,12 +367,22 @@ async function startServer() {
 
       memoryExamsMap.set(examId.toUpperCase(), payload);
       memoryExamsMap.set(examCode.toUpperCase(), payload);
+      // Also index by every variant code so student lookups by any variant code succeed
+      if (Array.isArray(payload.variants)) {
+        for (const v of payload.variants) {
+          if (v && v.code) {
+            memoryExamsMap.set(String(v.code).trim().toUpperCase(), payload);
+          }
+        }
+      }
+      memoryExamsMap.set('LATEST_ACTIVE_EXAM', payload);
 
       if (isMongoConnected) {
+        const codeRegex = new RegExp(`^${escapeRegex(examCode)}$`, 'i');
         const savedDoc = await ExamModel.findOneAndUpdate(
-          { $or: [{ examId }, { examCode }] },
+          { examCode: codeRegex },
           { $set: payload },
-          { new: true, upsert: true }
+          { new: true, upsert: true, setDefaultsOnInsert: true }
         ).lean();
 
         res.status(200).json({
@@ -387,6 +406,48 @@ async function startServer() {
     }
   });
 
+  // 1b. GET /api/exams (Fetch all / latest assigned exams for student devices on startup)
+  app.get('/api/exams', async (_req: Request, res: Response) => {
+    try {
+      if (isMongoConnected) {
+        const docs = await ExamModel.find({})
+          .sort({ updatedAt: -1 })
+          .limit(20)
+          .lean();
+
+        if (docs.length > 0) {
+          res.status(200).json({
+            success: true,
+            storage: 'mongodb_atlas',
+            latestExam: docs[0],
+            exams: docs,
+          });
+          return;
+        }
+      }
+
+      const memList = Array.from(memoryExamsMap.entries())
+        .filter(([k]) => k !== 'LATEST_ACTIVE_EXAM')
+        .map(([, v]) => v);
+      const latest =
+        memoryExamsMap.get('LATEST_ACTIVE_EXAM') ||
+        memList[memList.length - 1] ||
+        defaultExamRecord;
+
+      res.status(200).json({
+        success: true,
+        storage: isMongoConnected ? 'mongodb_atlas_empty' : 'server_cloud_cache',
+        latestExam: latest,
+        exams: memList.length > 0 ? memList : [defaultExamRecord],
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: error instanceof Error ? error.message : 'Failed to retrieve exams list.',
+      });
+    }
+  });
+
   // 2. GET /api/exams/:id
   app.get('/api/exams/:id', async (req: Request, res: Response) => {
     try {
@@ -396,13 +457,23 @@ async function startServer() {
         return;
       }
 
+      const safePattern = new RegExp(`^${escapeRegex(lookupId)}$`, 'i');
+
       if (isMongoConnected) {
-        const doc = await ExamModel.findOne({
+        let doc: any = await ExamModel.findOne({
           $or: [
-            { examId: new RegExp(`^${lookupId}$`, 'i') },
-            { examCode: new RegExp(`^${lookupId}$`, 'i') },
+            { examCode: safePattern },
+            { examId: safePattern },
+            { 'variants.code': safePattern },
           ],
-        }).lean();
+        })
+          .sort({ updatedAt: -1 })
+          .lean();
+
+        // If student entered a custom code that was just assigned, fall back to the most recently updated exam in MongoDB
+        if (!doc) {
+          doc = await ExamModel.findOne({}).sort({ updatedAt: -1 }).lean();
+        }
 
         if (doc) {
           res.status(200).json({
@@ -425,6 +496,7 @@ async function startServer() {
                 (v: any) => String(v.code).toUpperCase() === lookupId.toUpperCase()
               ))
         ) ||
+        memoryExamsMap.get('LATEST_ACTIVE_EXAM') ||
         defaultExamRecord;
 
       res.status(200).json({
@@ -463,15 +535,22 @@ async function startServer() {
       if (isMongoConnected) {
         targetExam = await ExamModel.findOne({
           $or: [
-            { examCode: new RegExp(`^${examCode}$`, 'i') },
-            { examId: new RegExp(`^${examId}$`, 'i') },
+            { examCode: new RegExp(`^${escapeRegex(examCode)}$`, 'i') },
+            { examId: new RegExp(`^${escapeRegex(examId)}$`, 'i') },
+            { 'variants.code': new RegExp(`^${escapeRegex(examCode)}$`, 'i') },
           ],
-        }).lean();
+        })
+          .sort({ updatedAt: -1 })
+          .lean();
+        if (!targetExam) {
+          targetExam = await ExamModel.findOne({}).sort({ updatedAt: -1 }).lean();
+        }
       }
       if (!targetExam) {
         targetExam =
           memoryExamsMap.get(examCode.toUpperCase()) ||
           memoryExamsMap.get(examId.toUpperCase()) ||
+          memoryExamsMap.get('LATEST_ACTIVE_EXAM') ||
           defaultExamRecord;
       }
 

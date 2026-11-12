@@ -425,61 +425,80 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
 
   return (
     <div className="max-w-[1400px] mx-auto px-6 py-8 space-y-8">
-      {/* Header & Primary Export / Delete Actions */}
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-slate-800/80">
-        <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-violet-400">
-            <BarChart3 className="w-4 h-4" />
+      {/* Header & Primary Export / Delete Actions — Balanced Full-Width Scientific Layout */}
+      <div className="bg-[#18182e] border border-indigo-900/60 rounded-2xl p-5 sm:p-6 shadow-md space-y-4">
+        <div className="space-y-1.5">
+          <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-violet-400 font-bold">
+            <BarChart3 className="w-4 h-4 shrink-0" />
             <span>TRUNG TÂM THỐNG KÊ KẾT QUẢ & QUÁ TRÌNH LÀM BÀI CỦA HỌC SINH</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-            Thống Kê Điểm Thi & Nhật Ký Làm Bài — {examData.title}
-          </h1>
-          <p className="text-sm text-slate-300">
+          <div className="flex flex-wrap items-baseline justify-between gap-3">
+            <h1 className="text-xl sm:text-2xl lg:text-3xl font-extrabold tracking-tight text-white leading-snug">
+              Thống Kê Điểm Thi & Nhật Ký Làm Bài
+            </h1>
+            <span className="px-3 py-1 rounded-lg bg-violet-600/20 border border-violet-500/40 text-xs sm:text-sm font-mono font-bold text-violet-300">
+              Đề thi: {examData.title} ({examData.subject})
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
             Theo dõi chi tiết điểm từng phần (Phần I, II, III), thời gian làm bài, lịch sử từng câu trả lời và xuất file Excel nhập điểm sang nền tảng khác.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={handleExportExcelXls}
-            disabled={filteredRows.length === 0}
-            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl shadow-lg shadow-emerald-950/60 transition-all"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>📥 Tải Kết Quả Về Máy (Excel .xls)</span>
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-3.5 border-t border-slate-800/80">
+          <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+            <span className="px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-300 whitespace-nowrap">
+              Danh sách hiện tại: <strong className="text-white">{filteredRows.length} học sinh</strong>
+            </span>
+            <span className="px-2.5 py-1.5 rounded-lg bg-emerald-950/70 border border-emerald-600/50 text-emerald-300 whitespace-nowrap">
+              Đã nộp bài: <strong>{statsSummary.submittedCount}</strong>
+            </span>
+            <span className="px-2.5 py-1.5 rounded-lg bg-amber-950/60 border border-amber-600/50 text-amber-300 whitespace-nowrap">
+              Đang làm bài: <strong>{statsSummary.activeCount}</strong>
+            </span>
+          </div>
 
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            disabled={filteredRows.length === 0}
-            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-indigo-950/90 hover:bg-indigo-900 disabled:opacity-50 text-indigo-200 border border-indigo-700/70 rounded-xl transition-colors"
-          >
-            <Download className="w-4 h-4 text-violet-400" />
-            <span>Xuất CSV (vnEdu / SMAS)</span>
-          </button>
-
-          {studentRows.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             <button
               type="button"
-              onClick={() => setConfirmClearAll(true)}
-              className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-700/70 rounded-xl transition-colors"
+              onClick={handleExportExcelXls}
+              disabled={filteredRows.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl shadow-md transition-all whitespace-nowrap shrink-0"
             >
-              <Trash2 className="w-4 h-4 text-rose-400" />
-              <span>Xoá Khi Đã Kiểm Tra Xong</span>
+              <FileSpreadsheet className="w-4 h-4 shrink-0" />
+              <span>📥 Tải Kết Quả Về Máy (Excel .xls)</span>
             </button>
-          ) : (
+
             <button
               type="button"
-              onClick={onRestoreSampleRecords}
-              className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-colors"
+              onClick={handleExportCsv}
+              disabled={filteredRows.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-indigo-950/90 hover:bg-indigo-900 disabled:opacity-50 text-indigo-200 border border-indigo-700/70 rounded-xl transition-colors whitespace-nowrap shrink-0"
             >
-              <RotateCcw className="w-4 h-4 text-violet-400" />
-              <span>Khôi Phục Dữ Liệu Mẫu</span>
+              <Download className="w-4 h-4 text-violet-400 shrink-0" />
+              <span>Xuất CSV (vnEdu / SMAS)</span>
             </button>
-          )}
+
+            {studentRows.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setConfirmClearAll(true)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-700/70 rounded-xl transition-colors whitespace-nowrap shrink-0"
+              >
+                <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
+                <span>Xoá Khi Đã Kiểm Tra Xong</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onRestoreSampleRecords}
+                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-colors whitespace-nowrap shrink-0"
+              >
+                <RotateCcw className="w-4 h-4 text-violet-400 shrink-0" />
+                <span>Khôi Phục Dữ Liệu Mẫu</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -615,34 +634,34 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
             Tính trên {statsSummary.submittedCount} bài thi đã nộp
           </span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
-          <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-700/50 flex items-center justify-between">
-            <span className="text-emerald-200 font-semibold">Xuất sắc (9.0–10):</span>
-            <span className="font-mono font-bold text-base text-emerald-400">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+          <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-700/50 flex items-center justify-between gap-2">
+            <span className="text-emerald-200 font-semibold whitespace-nowrap">Xuất sắc (9.0–10):</span>
+            <span className="font-mono font-bold text-base text-emerald-400 shrink-0">
               {statsSummary.dist.excellent}
             </span>
           </div>
-          <div className="p-3 rounded-xl bg-sky-950/50 border border-sky-700/50 flex items-center justify-between">
-            <span className="text-sky-200 font-semibold">Giỏi (8.0–8.9):</span>
-            <span className="font-mono font-bold text-base text-sky-400">
+          <div className="p-3 rounded-xl bg-sky-950/50 border border-sky-700/50 flex items-center justify-between gap-2">
+            <span className="text-sky-200 font-semibold whitespace-nowrap">Giỏi (8.0–8.9):</span>
+            <span className="font-mono font-bold text-base text-sky-400 shrink-0">
               {statsSummary.dist.good}
             </span>
           </div>
-          <div className="p-3 rounded-xl bg-violet-950/50 border border-violet-700/50 flex items-center justify-between">
-            <span className="text-violet-200 font-semibold">Khá (6.5–7.9):</span>
-            <span className="font-mono font-bold text-base text-violet-400">
+          <div className="p-3 rounded-xl bg-violet-950/50 border border-violet-700/50 flex items-center justify-between gap-2">
+            <span className="text-violet-200 font-semibold whitespace-nowrap">Khá (6.5–7.9):</span>
+            <span className="font-mono font-bold text-base text-violet-400 shrink-0">
               {statsSummary.dist.fair}
             </span>
           </div>
-          <div className="p-3 rounded-xl bg-amber-950/50 border border-amber-700/50 flex items-center justify-between">
-            <span className="text-amber-200 font-semibold">Đạt (5.0–6.4):</span>
-            <span className="font-mono font-bold text-base text-amber-400">
+          <div className="p-3 rounded-xl bg-amber-950/50 border border-amber-700/50 flex items-center justify-between gap-2">
+            <span className="text-amber-200 font-semibold whitespace-nowrap">Đạt (5.0–6.4):</span>
+            <span className="font-mono font-bold text-base text-amber-400 shrink-0">
               {statsSummary.dist.average}
             </span>
           </div>
-          <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-700/50 flex items-center justify-between">
-            <span className="text-rose-200 font-semibold">Chưa đạt (&lt; 5.0):</span>
-            <span className="font-mono font-bold text-base text-rose-400">
+          <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-700/50 flex items-center justify-between gap-2">
+            <span className="text-rose-200 font-semibold whitespace-nowrap">Chưa đạt (&lt; 5.0):</span>
+            <span className="font-mono font-bold text-base text-rose-400 shrink-0">
               {statsSummary.dist.below}
             </span>
           </div>
@@ -733,7 +752,7 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
           <div className="overflow-x-auto border border-slate-800 rounded-xl">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
-                <tr className="bg-slate-950/90 text-xs font-mono uppercase text-slate-300 border-b border-slate-800">
+                <tr className="bg-slate-950/90 text-xs font-mono uppercase text-slate-300 border-b border-slate-800 whitespace-nowrap">
                   <th className="py-3.5 px-3 text-center w-12">STT</th>
                   <th className="py-3.5 px-3">SBD</th>
                   <th className="py-3.5 px-4">Họ và Tên Học Sinh</th>
@@ -762,14 +781,14 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
                       <td className="py-3.5 px-3 text-center font-mono text-xs text-slate-400">
                         {index + 1}
                       </td>
-                      <td className="py-3.5 px-3 font-mono font-bold text-violet-300">
+                      <td className="py-3.5 px-3 font-mono font-bold text-violet-300 whitespace-nowrap">
                         {row.studentId}
                       </td>
                       <td className="py-3.5 px-4">
-                        <div className="font-bold text-white flex items-center gap-2">
-                          <span>{row.studentName}</span>
+                        <div className="font-bold text-white flex flex-wrap items-center gap-2">
+                          <span className="whitespace-nowrap">{row.studentName}</span>
                           {row.isLiveBrowserUser && (
-                            <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded bg-violet-600/30 text-violet-200 border border-violet-500/50">
+                            <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded bg-violet-600/30 text-violet-200 border border-violet-500/50 whitespace-nowrap shrink-0">
                               Trực tuyến
                             </span>
                           )}
@@ -778,25 +797,25 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
                           {row.lastEventText}
                         </div>
                       </td>
-                      <td className="py-3.5 px-3 text-center">
+                      <td className="py-3.5 px-3 text-center whitespace-nowrap">
                         <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 font-mono font-bold text-xs text-indigo-300">
                           {row.examCode}
                         </span>
                       </td>
-                      <td className="py-3.5 px-3 text-center">
+                      <td className="py-3.5 px-3 text-center whitespace-nowrap">
                         {row.status === 'SUBMITTED' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-600/50 text-emerald-300 text-xs font-semibold">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-950/80 border border-emerald-600/50 text-emerald-300 text-xs font-semibold whitespace-nowrap">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
                             Đã nộp
                           </span>
                         ) : row.status === 'VIOLATION_WARN' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-950/80 border border-rose-600/50 text-rose-300 text-xs font-semibold">
-                            <ShieldAlert className="w-3.5 h-3.5" />
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-950/80 border border-rose-600/50 text-rose-300 text-xs font-semibold whitespace-nowrap">
+                            <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
                             Cảnh báo
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-950/80 border border-amber-600/50 text-amber-300 text-xs font-semibold">
-                            <Clock className="w-3.5 h-3.5" />
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-950/80 border border-amber-600/50 text-amber-300 text-xs font-semibold whitespace-nowrap">
+                            <Clock className="w-3.5 h-3.5 shrink-0" />
                             Đang làm
                           </span>
                         )}

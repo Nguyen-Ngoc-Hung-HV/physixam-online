@@ -28,6 +28,8 @@ interface LandingPageProps {
   onNavigateTeacher: (subTab?: 'bank' | 'scrambler' | 'monitor' | 'online_exam') => void;
   onNavigateStudent: (examCode?: string) => void;
   onResetSystemCache: () => void;
+  isAdminAuthenticated?: boolean;
+  onRequestAdminAuth?: (featureLabel: string, onAuthorized: () => void) => void;
 }
 
 export type NoticeCategory = 'Thông báo thi' | 'Lịch nộp bài' | 'Nhắc việc chuyên môn';
@@ -81,7 +83,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onNavigateTeacher,
   onNavigateStudent,
   onResetSystemCache,
+  isAdminAuthenticated = false,
+  onRequestAdminAuth,
 }) => {
+  const runAdminProtectedAction = (featureLabel: string, action: () => void) => {
+    if (isAdminAuthenticated || !onRequestAdminAuth) {
+      action();
+    } else {
+      onRequestAdminAuth(featureLabel, action);
+    }
+  };
   // Unified Notice Board State (Single Seamless Feed + Quick-Add "+" Toggle)
   const [showQuickAddForm, setShowQuickAddForm] = useState<boolean>(false);
   const [notices, setNotices] = useState<AdminNoticeItem[]>(() => {
@@ -147,15 +158,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   };
 
   const handleTogglePinNotice = (id: string) => {
-    setNotices((prev) =>
-      prev
-        .map((n) => (n.id === id ? { ...n, pinned: !n.pinned } : n))
-        .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))
-    );
+    runAdminProtectedAction('Ghim thông báo trên Bảng Tin', () => {
+      setNotices((prev) =>
+        prev
+          .map((n) => (n.id === id ? { ...n, pinned: !n.pinned } : n))
+          .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))
+      );
+    });
   };
 
   const handleDeleteNotice = (id: string) => {
-    setNotices((prev) => prev.filter((n) => n.id !== id));
+    runAdminProtectedAction('Xoá thông báo trên Bảng Tin', () => {
+      setNotices((prev) => prev.filter((n) => n.id !== id));
+    });
   };
 
   const handleBannerUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -177,12 +192,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   };
 
   const handleClearBanner = () => {
-    setUploadedBannerUrl(null);
-    try {
-      localStorage.removeItem('smarttest_gdpt2018_banner_preview');
-    } catch {
-      // Ignore
-    }
+    runAdminProtectedAction('Gỡ ảnh đính kèm Bảng Tin', () => {
+      setUploadedBannerUrl(null);
+      try {
+        localStorage.removeItem('smarttest_gdpt2018_banner_preview');
+      } catch {
+        // Ignore
+      }
+    });
   };
 
   // Interactive Showcase State
@@ -246,12 +263,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   };
 
   const handleClearCacheClick = () => {
-    onResetSystemCache();
-    setNotices(DEFAULT_NOTICES);
-    setCacheClearedNotice(
-      'Đã làm sạch bộ nhớ đệm LocalStorage và khôi phục trạng thái mẫu ban đầu.'
-    );
-    window.setTimeout(() => setCacheClearedNotice(null), 4000);
+    runAdminProtectedAction('Xoá Bộ Nhớ Đệm Phiên Thi (Reset Cache)', () => {
+      onResetSystemCache();
+      setNotices(DEFAULT_NOTICES);
+      setCacheClearedNotice(
+        'Đã làm sạch bộ nhớ đệm LocalStorage và khôi phục trạng thái mẫu ban đầu.'
+      );
+      window.setTimeout(() => setCacheClearedNotice(null), 4000);
+    });
   };
 
   const sortedNotices = [...notices].sort(
@@ -357,22 +376,26 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <div className="lg:col-span-5 w-full flex flex-col">
             <div className="bg-slate-900/80 border-2 border-violet-600/50 rounded-2xl p-5 shadow-xl flex flex-col justify-start h-full gap-4">
               {/* 1. Header: Title "Bảng Tin & Nhắc Việc", Live Notice Count & "+" Quick-Add Button */}
-              <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-3.5 shrink-0">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-10 h-10 rounded-xl bg-violet-600 text-white shadow-md shadow-violet-600/30 flex items-center justify-center shrink-0">
+              <div className="flex items-start sm:items-center justify-between gap-2.5 border-b border-slate-800 pb-3.5 shrink-0">
+                <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
+                  <div className="w-10 h-10 rounded-xl bg-violet-600 text-white shadow-md shadow-violet-600/30 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
                     <Bell className="w-5 h-5" />
                   </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-lg sm:text-xl font-extrabold text-white leading-tight">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <h2 className="text-base sm:text-lg font-extrabold text-white leading-snug whitespace-nowrap">
                         Bảng Tin & Nhắc Việc
                       </h2>
-                      <span className="text-xs font-mono font-bold text-violet-300">
-                        · {notices.length} tin mới
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-violet-600/20 border border-violet-500/40 text-[11px] font-mono font-bold text-violet-300 whitespace-nowrap shrink-0">
+                        {notices.length} tin mới
                       </span>
                     </div>
-                    <p className="text-xs text-slate-400">
-                      Thông báo thi · Lịch nộp bài · Nhắc việc chuyên môn
+                    <p className="text-xs text-slate-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-snug">
+                      <span className="whitespace-nowrap">Thông báo thi</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="whitespace-nowrap">Lịch nộp bài</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="whitespace-nowrap">Nhắc việc chuyên môn</span>
                     </p>
                   </div>
                 </div>
@@ -387,8 +410,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   />
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    title="Đính kèm ảnh / sơ đồ phòng thi"
+                    onClick={() =>
+                      runAdminProtectedAction('Đính kèm ảnh sơ đồ phòng thi', () =>
+                        fileInputRef.current?.click()
+                      )
+                    }
+                    title="Đính kèm ảnh / sơ đồ phòng thi (Yêu cầu mật khẩu Quản trị)"
                     className="p-2 rounded-lg bg-slate-950/80 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white transition-colors"
                   >
                     <ImagePlus className="w-4 h-4" />
@@ -396,8 +423,20 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setShowQuickAddForm((prev) => !prev)}
-                    title={showQuickAddForm ? 'Đóng biểu mẫu' : 'Thêm thông báo nhắc việc mới'}
+                    onClick={() => {
+                      if (showQuickAddForm) {
+                        setShowQuickAddForm(false);
+                      } else {
+                        runAdminProtectedAction('Đăng thông báo mới lên Bảng Tin', () =>
+                          setShowQuickAddForm(true)
+                        );
+                      }
+                    }}
+                    title={
+                      showQuickAddForm
+                        ? 'Đóng biểu mẫu'
+                        : 'Thêm thông báo nhắc việc mới (Yêu cầu mật khẩu Quản trị)'
+                    }
                     className={`inline-flex items-center justify-center w-8 h-8 rounded-lg font-bold transition-colors ${
                       showQuickAddForm
                         ? 'bg-rose-600 text-white'
@@ -523,15 +562,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                       key={item.id}
                       className={`p-4 rounded-xl space-y-2 transition-all hover:scale-[1.005] ${cardSurfaceClass}`}
                     >
-                      <div className="flex items-center justify-between gap-2 text-xs">
-                        <div className="flex flex-wrap items-center gap-1.5 font-mono">
-                          <span className={`uppercase tracking-wider ${categoryTextClass}`}>
+                      <div className="flex items-start justify-between gap-2 text-xs">
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono min-w-0">
+                          <span className={`uppercase tracking-wider whitespace-nowrap ${categoryTextClass}`}>
                             [{priorityLabel}] {item.category}
                           </span>
                           <span aria-hidden="true" className="text-slate-400">
                             ·
                           </span>
-                          <span className="font-semibold text-slate-300">{item.timestamp}</span>
+                          <span className="font-semibold text-slate-300 whitespace-nowrap">
+                            {item.timestamp}
+                          </span>
                         </div>
 
                         <div className="flex items-center gap-1 shrink-0">
@@ -708,20 +749,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </div>
 
             <div className="space-y-3 pt-2 border-t border-slate-800/80">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm text-slate-400 font-mono mr-1">Chọn nhanh mã đề:</span>
-                {variants.map((v) => (
-                  <button
-                    key={v.code}
-                    type="button"
-                    onClick={() => onNavigateStudent(v.code)}
-                    className="px-3.5 py-2 text-sm font-mono font-semibold bg-slate-900 hover:bg-emerald-950 text-emerald-300 border border-slate-700 hover:border-emerald-600 rounded-lg transition-colors whitespace-nowrap shrink-0"
-                  >
-                    Mã đề {v.code}
-                  </button>
-                ))}
-              </div>
-
               <button
                 type="button"
                 onClick={() => onNavigateStudent(variants[0]?.code || '101')}
@@ -771,7 +798,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   Hỗ trợ nhập trực tiếp cấu trúc đề 3 phần (Phần I: 18 câu trắc nghiệm nhiều lựa chọn, Phần II: 4 câu Đúng/Sai với 16 mệnh đề, Phần III: 6 câu Trả lời ngắn), kiểm duyệt công thức KaTeX và điều chỉnh trọng số điểm trực quan.
                 </p>
               </div>
-              <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-sm">
+              <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-sm">
                 <span className="font-mono text-slate-400">
                   Hỗ trợ LaTeX inline $...$ & block $$...$$
                 </span>
@@ -792,7 +819,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   <span className="text-xs sm:text-sm font-mono font-bold text-indigo-400">
                     02. THUẬT TOÁN HOÁN VỊ MA TRẬN
                   </span>
-                  <Shuffle className="w-5 h-5 text-indigo-400" />
+                  <Shuffle className="w-5 h-5 text-indigo-400 shrink-0" />
                 </div>
                 <h3 className="text-xl font-bold text-white">
                   Động Cơ Trộn Đề Thông Minh (Smart Scrambler)
@@ -801,7 +828,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   Tự động hoán vị thứ tự câu hỏi và phương án theo đúng quy chuẩn GDPT 2018, bảo toàn tính logic của các chùm lệnh hỏi a), b), c), d) ở Phần II và tự động kết xuất bảng ma trận đáp án cho toàn bộ các mã đề.
                 </p>
               </div>
-              <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-sm">
+              <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-sm">
                 <span className="font-mono text-slate-400">
                   Khởi tạo tức thì mã đề 101, 102, 103, 104
                 </span>
@@ -822,7 +849,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   <span className="text-xs sm:text-sm font-mono font-bold text-emerald-400">
                     03. AN NINH PHÒNG MÁY & CHỐNG MẤT BÀI
                   </span>
-                  <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                  <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
                 </div>
                 <h3 className="text-xl font-bold text-white">
                   Giám Sát Phòng Máy Độc Lập (Local LAN Mode)
@@ -831,7 +858,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   Vận hành độc lập không phụ thuộc Internet, phát hiện học sinh chuyển tab/thu nhỏ cửa sổ hoặc thoát chế độ Toàn màn hình. Cơ chế lưu đệm LocalStorage tự động bảo vệ bài làm khi mất điện hoặc rớt mạng đột ngột.
                 </p>
               </div>
-              <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-sm">
+              <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-sm">
                 <span className="font-mono text-slate-400">
                   Đồng bộ trực tiếp với bảng theo dõi Giáo viên
                 </span>
@@ -852,7 +879,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   <span className="text-xs sm:text-sm font-mono font-bold text-amber-400">
                     04. ĐÁNH GIÁ CHUẨN BỘ GIÁO DỤC
                   </span>
-                  <Award className="w-5 h-5 text-amber-400" />
+                  <Award className="w-5 h-5 text-amber-400 shrink-0" />
                 </div>
                 <h3 className="text-xl font-bold text-white">
                   Động Cơ Chấm Điểm Lũy Tiến Tức Thì
@@ -861,7 +888,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   Tự động tính điểm theo công thức chuẩn Bộ GD&ĐT (Phần I: 0,25đ/câu; Phần II lũy tiến: 1 ý = 0,10đ, 2 ý = 0,25đ, 3 ý = 0,50đ, 4 ý = 1,00đ; Phần III: 0,25đ/câu chấp nhận cả dấu phẩy và dấu chấm thập phân).
                 </p>
               </div>
-              <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between text-sm">
+              <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-sm">
                 <span className="font-mono text-slate-400">
                   Xuất phiếu điểm chi tiết & giải thích từng câu
                 </span>
@@ -926,9 +953,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               {/* Sample Part I */}
               <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 space-y-4 flex flex-col justify-between">
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between text-xs sm:text-sm font-mono">
-                    <span className="text-violet-400 font-bold">PHẦN I · TRẮC NGHIỆM ABCD</span>
-                    <span className="text-emerald-400">+0,25 điểm / câu</span>
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs sm:text-sm font-mono">
+                    <span className="text-violet-400 font-bold whitespace-nowrap">PHẦN I · TRẮC NGHIỆM ABCD</span>
+                    <span className="text-emerald-400 whitespace-nowrap">+0,25 điểm / câu</span>
                   </div>
                   <div className="text-base text-slate-100 leading-relaxed">
                     <MathText text="Một vật dao động điều hòa với phương trình $x = A\cos(\omega t + \varphi)$. Gia tốc cực đại của vật có độ lớn là:" />
@@ -944,7 +971,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                         key={idx}
                         type="button"
                         onClick={() => setDemoPart1Choice(idx)}
-                        className={`w-full text-left px-3.5 py-2.5 rounded-lg border text-sm sm:text-base flex items-center justify-between transition-colors ${
+                        className={`w-full text-left px-3.5 py-2.5 rounded-lg border text-sm sm:text-base flex items-center justify-between gap-2 transition-colors ${
                           demoPart1Choice === idx
                             ? 'bg-indigo-950 border-violet-500 text-white'
                             : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:border-slate-700'
@@ -955,7 +982,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                           <MathText text={opt} />
                         </span>
                         {demoPart1Choice === idx && (
-                          <span className="font-mono text-xs text-emerald-400">
+                          <span className="font-mono text-xs text-emerald-400 whitespace-nowrap shrink-0">
                             {idx === 0 ? 'Đúng (+0,25đ)' : 'Sai (0,00đ)'}
                           </span>
                         )}
@@ -971,9 +998,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               {/* Sample Part II */}
               <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 space-y-4 flex flex-col justify-between">
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between text-xs sm:text-sm font-mono">
-                    <span className="text-violet-400 font-bold">PHẦN II · ĐÚNG / SAI LŨY TIẾN</span>
-                    <span className="text-emerald-400 font-bold">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs sm:text-sm font-mono">
+                    <span className="text-violet-400 font-bold whitespace-nowrap">PHẦN II · ĐÚNG / SAI LŨY TIẾN</span>
+                    <span className="text-emerald-400 font-bold whitespace-nowrap">
                       Đạt: {demoPart2Earned.toFixed(2)} / 1,00đ
                     </span>
                   </div>
@@ -1030,16 +1057,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 </div>
                 <div className="text-xs text-slate-400 font-mono border-t border-slate-800 pt-2.5">
                   Đang đúng {demoPart2CorrectCount}/4 ý → Barem Bộ GD&ĐT:{' '}
-                  <strong className="text-emerald-400">{demoPart2Earned.toFixed(2)} điểm</strong>
+                  <strong className="text-emerald-400 whitespace-nowrap">{demoPart2Earned.toFixed(2)} điểm</strong>
                 </div>
               </div>
 
               {/* Sample Part III */}
               <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 space-y-4 flex flex-col justify-between">
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between text-xs sm:text-sm font-mono">
-                    <span className="text-violet-400 font-bold">PHẦN III · TRẢ LỜI NGẮN</span>
-                    <span className="text-emerald-400">+0,25 điểm / câu</span>
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs sm:text-sm font-mono">
+                    <span className="text-violet-400 font-bold whitespace-nowrap">PHẦN III · TRẢ LỜI NGẮN</span>
+                    <span className="text-emerald-400 whitespace-nowrap">+0,25 điểm / câu</span>
                   </div>
                   <div className="text-base text-slate-100 leading-relaxed">
                     <MathText text="Mạch dao động $LC$ có $L = \frac{1}{\pi}\text{ mH}$ và $C = \frac{25}{\pi}\text{ nF}$. Tần số dao động riêng $f = \frac{1}{2\pi\sqrt{LC}}$ bằng bao nhiêu $\text{kHz}$?" />
@@ -1049,16 +1076,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     <label className="block text-xs sm:text-sm font-mono text-slate-400">
                       Nhập đáp số (chấp nhận dấu phẩy hoặc chấm):
                     </label>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <input
                         type="text"
                         value={demoPart3Input}
                         onChange={(e) => setDemoPart3Input(e.target.value)}
-                        className="w-32 px-3.5 py-2 rounded-lg bg-slate-900 border border-violet-500 text-white font-mono text-base font-bold focus:outline-none"
+                        className="w-28 px-3.5 py-2 rounded-lg bg-slate-900 border border-violet-500 text-white font-mono text-base font-bold focus:outline-none"
                       />
                       <span className="text-sm font-mono text-slate-400">kHz</span>
                       <span
-                        className={`ml-auto text-xs sm:text-sm font-mono font-bold ${
+                        className={`ml-auto text-xs sm:text-sm font-mono font-bold whitespace-nowrap ${
                           demoPart3Input.trim() === '100'
                             ? 'text-emerald-400'
                             : 'text-amber-400'
@@ -1072,7 +1099,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   </div>
                 </div>
 
-                <div className="text-xs text-slate-400 border-t border-slate-800 pt-2.5 flex items-center justify-between">
+                <div className="text-xs text-slate-400 border-t border-slate-800 pt-2.5 flex flex-wrap items-center justify-between gap-2">
                   <span>Tự động chuẩn hóa khoảng trắng & dấu thập phân.</span>
                   <button
                     type="button"

@@ -267,6 +267,250 @@ export function generateMultipleVariants(
   );
 }
 
+/**
+ * Randomly shuffles the order of questions within each part (Part I, Part II, Part III)
+ * and the order of answers/statements within each question (keeping Part I -> Part II -> Part III order intact).
+ * Used in "Chế độ kiểm tra" (exam mode) so students sitting next to each other never have identical exams.
+ */
+export function shuffleVariantForStudent(
+  baseVariant: ScrambledExamVariant,
+  studentSeed: string
+): ScrambledExamVariant {
+  if (!baseVariant) return baseVariant;
+  const rng = createSeededRandom(`STUDENT-EXAM-SHUFFLE-${baseVariant.code}-${studentSeed}`);
+  const optionLetters: ('A' | 'B' | 'C' | 'D')[] = ['A', 'B', 'C', 'D'];
+  const stmtLabels: ('a' | 'b' | 'c' | 'd')[] = ['a', 'b', 'c', 'd'];
+
+  // 1. Shuffle Part I questions and shuffle 4 options (A, B, C, D) inside each question
+  const shuffledP1 = shuffleWithRng(baseVariant.part1, rng).map(({ item }, displayIdx) => {
+    const currentCorrectIdx =
+      item.correctIndex !== undefined && item.correctIndex >= 0 ? item.correctIndex : 0;
+    const wrappedOpts = shuffleWithRng([...item.options], rng);
+    const nextOptions: [string, string, string, string] = [
+      wrappedOpts[0].item,
+      wrappedOpts[1].item,
+      wrappedOpts[2].item,
+      wrappedOpts[3].item,
+    ];
+    const nextCorrectIdx = wrappedOpts.findIndex((o) => o.originalIndex === currentCorrectIdx);
+    const safeCorrectIdx = nextCorrectIdx >= 0 ? nextCorrectIdx : 0;
+    const prevPerm = item.optionPermutation || [0, 1, 2, 3];
+    const nextPerm = wrappedOpts.map((o) => prevPerm[o.originalIndex] ?? o.originalIndex);
+
+    return {
+      ...item,
+      displayNumber: displayIdx + 1,
+      options: nextOptions,
+      correctIndex: safeCorrectIdx,
+      correct_answer: optionLetters[safeCorrectIdx],
+      optionPermutation: nextPerm,
+    };
+  });
+
+  // 2. Shuffle Part II questions and shuffle 4 sub-statements (a, b, c, d) inside each question
+  const shuffledP2 = shuffleWithRng(baseVariant.part2, rng).map(({ item }, displayIdx) => {
+    const wrappedStmts = shuffleWithRng([...item.statements], rng);
+    const nextStatements = wrappedStmts.map((entry, sIdx) => {
+      const truthVal =
+        entry.item.is_correct !== undefined
+          ? Boolean(entry.item.is_correct)
+          : Boolean(entry.item.isTrue);
+      return {
+        ...entry.item,
+        id: stmtLabels[sIdx],
+        displayLabel: stmtLabels[sIdx],
+        originalLabel: entry.item.originalLabel || entry.item.id,
+        isTrue: truthVal,
+        is_correct: truthVal,
+      };
+    }) as [
+      ScrambledPart2Statement,
+      ScrambledPart2Statement,
+      ScrambledPart2Statement,
+      ScrambledPart2Statement
+    ];
+
+    return {
+      ...item,
+      displayNumber: displayIdx + 1,
+      statements: nextStatements,
+    };
+  });
+
+  // 3. Shuffle Part III questions
+  const shuffledP3 = shuffleWithRng(baseVariant.part3, rng).map(({ item }, displayIdx) => ({
+    ...item,
+    displayNumber: displayIdx + 1,
+  }));
+
+  return {
+    ...baseVariant,
+    part1: shuffledP1,
+    part2: shuffledP2,
+    part3: shuffledP3,
+  };
+}
+
+/**
+ * Restores the exact original, unshuffled question order and answer option order
+ * for "Chế độ ôn tập" (practice mode).
+ */
+export function restoreUnshuffledVariant(
+  baseVariant: ScrambledExamVariant,
+  sourceExam?: ExamData
+): ScrambledExamVariant {
+  if (!baseVariant) return baseVariant;
+  const optionLetters: ('A' | 'B' | 'C' | 'D')[] = ['A', 'B', 'C', 'D'];
+  const stmtLabels: ('a' | 'b' | 'c' | 'd')[] = ['a', 'b', 'c', 'd'];
+
+  if (sourceExam && sourceExam.part1 && sourceExam.part2 && sourceExam.part3) {
+    const part1: ScrambledPart1Question[] = sourceExam.part1.map((item, idx) => {
+      const resolvedCorrect =
+        item.correctIndex !== undefined
+          ? item.correctIndex
+          : item.correct_answer
+          ? optionLetters.indexOf(item.correct_answer)
+          : 0;
+      const safeCorrect = resolvedCorrect >= 0 ? resolvedCorrect : 0;
+      const resolvedImageUrl = getResolvedQuestionImage(item, 'I', idx + 1);
+      const cleanQuestionText = item.question.replace(/@@IMAGE_TOKEN:[\s\S]*?@@/g, '').trim();
+      return {
+        ...item,
+        question: cleanQuestionText,
+        options: [...item.options] as [string, string, string, string],
+        correctIndex: safeCorrect,
+        correct_answer: optionLetters[safeCorrect],
+        originalQuestionNumber: idx + 1,
+        displayNumber: idx + 1,
+        optionPermutation: [0, 1, 2, 3],
+        has_image: Boolean(resolvedImageUrl),
+        image_url: resolvedImageUrl,
+      };
+    });
+
+    const part2: ScrambledPart2Question[] = sourceExam.part2.map((item, idx) => {
+      const resolvedImageUrl = getResolvedQuestionImage(item, 'II', idx + 1);
+      const cleanStemText = item.stem.replace(/@@IMAGE_TOKEN:[\s\S]*?@@/g, '').trim();
+      const statements = item.statements.map((st, sIdx) => {
+        const truthVal =
+          st.is_correct !== undefined ? Boolean(st.is_correct) : Boolean(st.isTrue);
+        return {
+          ...st,
+          id: stmtLabels[sIdx],
+          displayLabel: stmtLabels[sIdx],
+          originalLabel: stmtLabels[sIdx],
+          isTrue: truthVal,
+          is_correct: truthVal,
+        };
+      }) as [
+        ScrambledPart2Statement,
+        ScrambledPart2Statement,
+        ScrambledPart2Statement,
+        ScrambledPart2Statement
+      ];
+      return {
+        ...item,
+        stem: cleanStemText,
+        originalQuestionNumber: idx + 1,
+        displayNumber: idx + 1,
+        statements,
+        has_image: Boolean(resolvedImageUrl),
+        image_url: resolvedImageUrl,
+      };
+    });
+
+    const part3: ScrambledPart3Question[] = sourceExam.part3.map((item, idx) => {
+      const cleanVal = (item.correct_value ?? item.answer ?? '').trim();
+      const resolvedImageUrl = getResolvedQuestionImage(item, 'III', idx + 1);
+      const cleanQuestionText = item.question.replace(/@@IMAGE_TOKEN:[\s\S]*?@@/g, '').trim();
+      return {
+        ...item,
+        question: cleanQuestionText,
+        answer: cleanVal,
+        correct_value: cleanVal,
+        originalQuestionNumber: idx + 1,
+        displayNumber: idx + 1,
+        has_image: Boolean(resolvedImageUrl),
+        image_url: resolvedImageUrl,
+      };
+    });
+
+    return {
+      ...baseVariant,
+      part1,
+      part2,
+      part3,
+    };
+  }
+
+  // Fallback: unshuffle directly from baseVariant's originalQuestionNumber & optionPermutation / originalLabel
+  const unshuffledP1 = [...baseVariant.part1]
+    .sort((a, b) => (a.originalQuestionNumber || 0) - (b.originalQuestionNumber || 0))
+    .map((q, idx) => {
+      if (Array.isArray(q.optionPermutation) && q.optionPermutation.length === 4) {
+        const restoredOpts: [string, string, string, string] = ['', '', '', ''];
+        let restoredCorrect = 0;
+        q.optionPermutation.forEach((origOptIdx, shuffledIdx) => {
+          if (origOptIdx >= 0 && origOptIdx < 4) {
+            restoredOpts[origOptIdx] = q.options[shuffledIdx];
+            if (shuffledIdx === q.correctIndex) {
+              restoredCorrect = origOptIdx;
+            }
+          }
+        });
+        return {
+          ...q,
+          displayNumber: idx + 1,
+          options: restoredOpts,
+          correctIndex: restoredCorrect,
+          correct_answer: optionLetters[restoredCorrect],
+          optionPermutation: [0, 1, 2, 3],
+        };
+      }
+      return { ...q, displayNumber: idx + 1 };
+    });
+
+  const unshuffledP2 = [...baseVariant.part2]
+    .sort((a, b) => (a.originalQuestionNumber || 0) - (b.originalQuestionNumber || 0))
+    .map((q, idx) => {
+      const sortedStmts = [...q.statements]
+        .sort((s1, s2) => {
+          const l1 = s1.originalLabel || s1.displayLabel;
+          const l2 = s2.originalLabel || s2.displayLabel;
+          return l1.localeCompare(l2);
+        })
+        .map((st, sIdx) => ({
+          ...st,
+          id: stmtLabels[sIdx],
+          displayLabel: stmtLabels[sIdx],
+        })) as [
+        ScrambledPart2Statement,
+        ScrambledPart2Statement,
+        ScrambledPart2Statement,
+        ScrambledPart2Statement
+      ];
+      return {
+        ...q,
+        displayNumber: idx + 1,
+        statements: sortedStmts,
+      };
+    });
+
+  const unshuffledP3 = [...baseVariant.part3]
+    .sort((a, b) => (a.originalQuestionNumber || 0) - (b.originalQuestionNumber || 0))
+    .map((q, idx) => ({
+      ...q,
+      displayNumber: idx + 1,
+    }));
+
+  return {
+    ...baseVariant,
+    part1: unshuffledP1,
+    part2: unshuffledP2,
+    part3: unshuffledP3,
+  };
+}
+
 export function normalizeShortAnswer(raw: string | undefined): string {
   if (!raw) return '';
   return raw

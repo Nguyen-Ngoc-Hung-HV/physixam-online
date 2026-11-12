@@ -208,28 +208,55 @@ function gradeSubmissionOnServer(examDoc, answers, examCode) {
 // 3. RESTFUL API ENDPOINTS
 // ============================================================================
 
+const escapeRegex = (str) => String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 // POST /api/exams/import - Save newly imported/scrambled exams to MongoDB Atlas
 app.post('/api/exams/import', async (req, res) => {
   try {
     const body = req.body || {};
     const examData = body.examData || body;
-    const examId = String(examData.examId || body.examId || `EXAM-${Date.now()}`).trim();
     const examCode = String(body.examCode || examData.examCode || '1102').trim();
+    const examId = String(
+      examData.examId || body.examId || `EXAM-${examCode}-${Date.now()}`
+    ).trim();
 
+    const codeRegex = new RegExp(`^${escapeRegex(examCode)}$`, 'i');
     const doc = await Exam.findOneAndUpdate(
-      { $or: [{ examId }, { examCode }] },
+      { examCode: codeRegex },
       {
         $set: {
           ...examData,
+          title: body.examTitle || examData.title || 'Kiểm Tra Thông Minh - Chuẩn Cấu Trúc GDPT 2018',
+          subject: body.subject || examData.subject || 'Vật Lý 12',
+          durationMinutes: Number(body.durationMinutes || examData.durationMinutes) || 50,
           examId,
           examCode,
+          mode: body.mode || examData.mode || 'exam',
+          violationLevel: body.violationLevel || examData.violationLevel || 2,
+          maxViolations: body.maxViolations ?? examData.maxViolations ?? 3,
+          assignedClasses: Array.isArray(body.assignedClasses) ? body.assignedClasses : ['12A1'],
+          detailedSolutionContent: body.detailedSolutionContent || examData.detailedSolutionContent || '',
           variants: body.variants || examData.variants || [],
         },
       },
-      { new: true, upsert: true }
+      { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
     res.status(200).json({ success: true, exam: doc });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/exams - Retrieve latest exams for student devices
+app.get('/api/exams', async (_req, res) => {
+  try {
+    const docs = await Exam.find({}).sort({ updatedAt: -1 }).limit(20);
+    res.status(200).json({
+      success: true,
+      latestExam: docs[0] || null,
+      exams: docs,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -239,12 +266,18 @@ app.post('/api/exams/import', async (req, res) => {
 app.get('/api/exams/:id', async (req, res) => {
   try {
     const id = String(req.params.id || '').trim();
-    const exam = await Exam.findOne({
+    const safePattern = new RegExp(`^${escapeRegex(id)}$`, 'i');
+    let exam = await Exam.findOne({
       $or: [
-        { examId: new RegExp(`^${id}$`, 'i') },
-        { examCode: new RegExp(`^${id}$`, 'i') },
+        { examCode: safePattern },
+        { examId: safePattern },
+        { 'variants.code': safePattern },
       ],
-    });
+    }).sort({ updatedAt: -1 });
+
+    if (!exam) {
+      exam = await Exam.findOne({}).sort({ updatedAt: -1 });
+    }
     if (!exam) {
       return res.status(404).json({ success: false, message: 'Exam not found' });
     }

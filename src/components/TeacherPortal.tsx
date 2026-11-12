@@ -178,6 +178,7 @@ interface TeacherPortalProps {
   onSaveOnlineAssignment?: (assignment: OnlineExamAssignment) => void;
   onDeleteOnlineAssignment?: (assignmentId: string) => void;
   onNavigateHome?: () => void;
+  isStandaloneScrambler?: boolean;
 }
 
 export const TeacherPortal: React.FC<TeacherPortalProps> = ({
@@ -196,6 +197,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
   onSaveOnlineAssignment,
   onDeleteOnlineAssignment,
   onNavigateHome,
+  isStandaloneScrambler = false,
 }) => {
   // JSON & Template state
   const [jsonText, setJsonText] = useState<string>(() => JSON.stringify(examData, null, 2));
@@ -251,7 +253,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
   });
 
   // Group 1: Folder Filter & Custom Folder Creation
-  const [selectedFolderFilter, setSelectedFolderFilter] = useState<string>('ALL');
+  const [selectedFolderFilter, setSelectedFolderFilter] = useState<string>('');
   const [bankSearchQuery, setBankSearchQuery] = useState<string>('');
   const [showAddFolderModal, setShowAddFolderModal] = useState<boolean>(false);
   const [newFolderCode, setNewFolderCode] = useState<string>('');
@@ -296,14 +298,27 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       const raw = localStorage.getItem(SCHOOL_CLASSES_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as string[];
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       // Fallback
     }
     return DEFAULT_SCHOOL_CLASSES;
   });
-  const [selectedOnlineClasses, setSelectedOnlineClasses] = useState<string[]>(['12A1', '12A2']);
+  const [selectedOnlineClasses, setSelectedOnlineClasses] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(SCHOOL_CLASSES_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as string[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.slice(0, Math.min(2, parsed.length));
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return ['12A1', '12A2'];
+  });
   const [newClassNameInput, setNewClassNameInput] = useState<string>('');
   const [onlineStartTime, setOnlineStartTime] = useState<string>('2026-11-10T07:30');
   const [onlineEndTime, setOnlineEndTime] = useState<string>('2026-11-10T22:00');
@@ -665,6 +680,12 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       subject: nextSubject,
       durationMinutes: nextDuration,
     };
+
+    // Keep Tab 4 (Tổ Chức Thi Online) synchronized with the newly ingested exam
+    setOnlineSelectedExamData(synchronizedExam);
+    setOnlineConfigTitle(nextTerm);
+    setOnlineConfigSubject(nextSubject);
+    setOnlineDurationMinutes(nextDuration);
 
     setJsonText(JSON.stringify(synchronizedExam, null, 2));
     setJsonError(null);
@@ -1039,6 +1060,11 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     }
 
     setLastSavedBankItem(newItem);
+    setSelectedOnlineBankId(newItem.id);
+    setOnlineSelectedExamData(updatedExam);
+    setOnlineConfigTitle(finalTitle);
+    setOnlineConfigSubject(finalSubject);
+    setOnlineDurationMinutes(finalDuration);
     setSelectedFolderFilter(folderObj.id);
     setIsExamSavedInStep3(true);
     setJsonSuccess(
@@ -1069,6 +1095,20 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       },
     });
     setSelectedVariantCode(cleanCode);
+    setOnlineDispatchCode(cleanCode);
+    setOnlineSelectedExamData(examData);
+
+    if (onSaveOnlineAssignment) {
+      onSaveOnlineAssignment(
+        buildSynchronizedAssignmentPayload({
+          examCode: cleanCode,
+          examTitle: examData.title,
+          subject: examData.subject,
+          durationMinutes: examData.durationMinutes,
+          examData,
+        })
+      );
+    }
 
     if (lastSavedBankItem) {
       const updatedItems = savedBankExams.map((item) =>
@@ -1651,6 +1691,31 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     setNewClassNameInput('');
   };
 
+  const handleDeleteOnlineClass = (clsName: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const nextAvailable = availableClasses.filter((c) => c !== clsName);
+    setAvailableClasses(nextAvailable);
+    try {
+      localStorage.setItem(SCHOOL_CLASSES_STORAGE_KEY, JSON.stringify(nextAvailable));
+    } catch {
+      // Ignore storage error
+    }
+
+    const nextSelected = selectedOnlineClasses.filter((c) => c !== clsName);
+    const fallbackSelected =
+      nextSelected.length > 0
+        ? nextSelected
+        : nextAvailable.length > 0
+        ? [nextAvailable[0]]
+        : [];
+    setSelectedOnlineClasses(fallbackSelected);
+    if (isOnlinePublished && onSaveOnlineAssignment && fallbackSelected.length > 0) {
+      onSaveOnlineAssignment(
+        buildSynchronizedAssignmentPayload({ assignedClasses: fallbackSelected })
+      );
+    }
+  };
+
   const handlePublishAndSyncOnlineExam = () => {
     const payload = buildSynchronizedAssignmentPayload();
     if (onSaveOnlineAssignment) {
@@ -1693,85 +1758,89 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
         </div>
       )}
 
-      {/* Workspace Header & Sub-Navigation */}
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 pb-6 border-b border-slate-800/80 no-print">
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-violet-400">
-            Cổng Quản Trị Giáo Viên · Chuẩn Cấu Trúc Đề Thi Tốt Nghiệp THPT 2025–2026 (GDPT 2018)
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-            Kiểm Tra Thông Minh - Chuẩn Cấu Trúc GDPT 2018
+      {/* Workspace Header & Sub-Navigation — Centered & Compact Layout */}
+      <div className="bg-[#18182e] border border-indigo-900/60 rounded-2xl px-4 py-4 sm:px-6 sm:py-4 shadow-md space-y-3 no-print">
+        <div className="flex flex-col items-center text-center space-y-2.5">
+          <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-white leading-tight">
+            Kiểm Tra Thông Minh — Chuẩn Cấu Trúc GDPT 2018
           </h1>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 font-mono tabular-nums">
-            <span>Mã ngân hàng: {examData.examId}</span>
-            <span aria-hidden="true">·</span>
-            <span>Phần I: {examData.part1.length} câu</span>
-            <span aria-hidden="true">·</span>
-            <span>Phần II: {examData.part2.length} câu (16 ý Đ/S)</span>
-            <span aria-hidden="true">·</span>
-            <span>Phần III: {examData.part3.length} câu</span>
-            <span aria-hidden="true">·</span>
-            <span className="text-emerald-400 font-semibold">
+
+          <div className="flex flex-wrap items-center justify-center gap-2 text-xs font-mono tabular-nums">
+            <span className="px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-300 whitespace-nowrap">
+              Mã ngân hàng: <strong className="text-white">{examData.examId}</strong>
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-300 whitespace-nowrap">
+              Phần I: <strong className="text-white">{examData.part1.length} câu</strong>
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-300 whitespace-nowrap">
+              Phần II: <strong className="text-white">{examData.part2.length} câu ({examData.part2.length * 4} ý Đ/S)</strong>
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-800 text-slate-300 whitespace-nowrap">
+              Phần III: <strong className="text-white">{examData.part3.length} câu</strong>
+            </span>
+            <span className="px-3 py-1 rounded-lg bg-emerald-950/80 border border-emerald-600/50 text-emerald-300 font-bold whitespace-nowrap">
               Tổng điểm chuẩn: {totalExamPoints.toFixed(2)} / 10.00 điểm
             </span>
           </div>
         </div>
 
-        {/* Interactive Workspace Switcher Tabs */}
-        <div className="flex flex-wrap items-center gap-2 p-1.5 bg-[#18182e] border border-indigo-900/60 rounded-xl shrink-0">
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('bank')}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm sm:text-base font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-              activeSubTab === 'bank'
-                ? 'bg-violet-600 text-white shadow-sm'
-                : 'text-slate-300 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span>1. Ngân Hàng Đề</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setScramblerWizardStep(1);
-              setScramblerCompletedZipName(null);
-              setActiveSubTab('scrambler');
-            }}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm sm:text-base font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-              activeSubTab === 'scrambler'
-                ? 'bg-violet-600 text-white shadow-sm'
-                : 'text-slate-300 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Shuffle className="w-4 h-4" />
-            <span>2. Trộn Đề</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('monitor')}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm sm:text-base font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-              activeSubTab === 'monitor'
-                ? 'bg-violet-600 text-white shadow-sm'
-                : 'text-slate-300 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Monitor className="w-4 h-4" />
-            <span>3. Giám Sát LAN</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveSubTab('online_exam')}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm sm:text-base font-semibold rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-              activeSubTab === 'online_exam'
-                ? 'bg-violet-600 text-white shadow-sm'
-                : 'text-slate-300 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Play className="w-4 h-4" />
-            <span>4. Tổ Chức Thi Online</span>
-          </button>
-        </div>
+        {/* Interactive Workspace Switcher Tabs — Balanced 4-Column Bar */}
+        {!isStandaloneScrambler && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-3 border-t border-slate-800/80">
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('bank')}
+              className={`flex items-center justify-center gap-2 px-4 py-2 text-sm sm:text-base font-bold rounded-xl border transition-all whitespace-nowrap ${
+                activeSubTab === 'bank'
+                  ? 'bg-violet-600 text-white border-violet-400 shadow-md shadow-violet-950/40'
+                  : 'bg-slate-900/80 text-slate-300 border-slate-800 hover:text-white hover:border-violet-500/50'
+              }`}
+            >
+              <Layers className="w-4 h-4 shrink-0" />
+              <span>1. Ngân Hàng Đề</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setScramblerWizardStep(1);
+                setScramblerCompletedZipName(null);
+                setActiveSubTab('scrambler');
+              }}
+              className={`flex items-center justify-center gap-2 px-4 py-2 text-sm sm:text-base font-bold rounded-xl border transition-all whitespace-nowrap ${
+                activeSubTab === 'scrambler'
+                  ? 'bg-violet-600 text-white border-violet-400 shadow-md shadow-violet-950/40'
+                  : 'bg-slate-900/80 text-slate-300 border-slate-800 hover:text-white hover:border-violet-500/50'
+              }`}
+            >
+              <Shuffle className="w-4 h-4 shrink-0" />
+              <span>2. Trộn Đề</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('monitor')}
+              className={`flex items-center justify-center gap-2 px-4 py-2 text-sm sm:text-base font-bold rounded-xl border transition-all whitespace-nowrap ${
+                activeSubTab === 'monitor'
+                  ? 'bg-violet-600 text-white border-violet-400 shadow-md shadow-violet-950/40'
+                  : 'bg-slate-900/80 text-slate-300 border-slate-800 hover:text-white hover:border-violet-500/50'
+              }`}
+            >
+              <Monitor className="w-4 h-4 shrink-0" />
+              <span>3. Giám Sát LAN</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveSubTab('online_exam')}
+              className={`flex items-center justify-center gap-2 px-4 py-2 text-sm sm:text-base font-bold rounded-xl border transition-all whitespace-nowrap ${
+                activeSubTab === 'online_exam'
+                  ? 'bg-violet-600 text-white border-violet-400 shadow-md shadow-violet-950/40'
+                  : 'bg-slate-900/80 text-slate-300 border-slate-800 hover:text-white hover:border-violet-500/50'
+              }`}
+            >
+              <Play className="w-4 h-4 shrink-0" />
+              <span>4. Tổ Chức Thi Online</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* =====================================================================
@@ -1962,34 +2031,8 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
               </div>
             )}
 
-            {/* Folder Filter Tabs / Cards (Tất cả + KTTX, KTGHK, KTCHK, THI TỐT NGHIỆP...) */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-              <button
-                type="button"
-                onClick={() => setSelectedFolderFilter('ALL')}
-                className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 ${
-                  selectedFolderFilter === 'ALL'
-                    ? 'bg-violet-600/25 border-violet-400 text-white shadow-md'
-                    : 'bg-slate-900/70 hover:bg-slate-900 border-slate-800 text-slate-300'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-1.5 text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700">
-                    <Folder className="w-3.5 h-3.5 text-violet-400" />
-                    TẤT CẢ
-                  </span>
-                  <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md bg-violet-950/90 text-violet-300 border border-violet-700/50">
-                    {savedBankExams.length} đề
-                  </span>
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-white">Toàn Bộ Kho Đề</div>
-                  <div className="text-xs text-slate-400 line-clamp-1">
-                    Hiển thị tất cả các thư mục kỳ thi
-                  </div>
-                </div>
-              </button>
-
+            {/* Folder Filter Tabs / Cards (KTTX, KTGHK, KTCHK, THI TỐT NGHIỆP...) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {bankFolders.map((folder) => {
                 const count = savedBankExams.filter((item) => item.folderId === folder.id).length;
                 const isSelected = selectedFolderFilter === folder.id;
@@ -1998,7 +2041,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                     key={folder.id}
                     type="button"
                     onClick={() => {
-                      setSelectedFolderFilter(folder.id);
+                      setSelectedFolderFilter((prev) => (prev === folder.id ? '' : folder.id));
                       setTargetSaveFolderId(folder.id);
                     }}
                     className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between gap-2 ${
@@ -2009,12 +2052,12 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span
-                        className={`inline-flex items-center gap-1.5 text-xs font-mono font-bold px-2 py-0.5 rounded border ${folder.badgeClass}`}
+                        className={`inline-flex items-center gap-1.5 text-xs font-mono font-bold px-2 py-0.5 rounded border whitespace-nowrap shrink-0 ${folder.badgeClass}`}
                       >
                         <Folder className="w-3.5 h-3.5 shrink-0" />
                         {folder.code}
                       </span>
-                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md bg-slate-950/80 text-slate-300 border border-slate-800">
+                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md bg-slate-950/80 text-slate-300 border border-slate-800 whitespace-nowrap shrink-0">
                         {count} đề
                       </span>
                     </div>
@@ -2031,129 +2074,142 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
               })}
             </div>
 
-            {/* Danh sách các đề thi đang lưu trong thư mục được chọn */}
-            {(() => {
-              const filteredExams = savedBankExams.filter((item) => {
-                if (selectedFolderFilter !== 'ALL' && item.folderId !== selectedFolderFilter) {
-                  return false;
-                }
-                if (bankSearchQuery.trim()) {
-                  const q = bankSearchQuery.toLowerCase();
-                  return (
-                    item.examData.title.toLowerCase().includes(q) ||
-                    item.examData.subject.toLowerCase().includes(q) ||
-                    item.examData.examId.toLowerCase().includes(q) ||
-                    (item.onlineExamCode || '').toLowerCase().includes(q)
-                  );
-                }
-                return true;
-              });
+            {/* Chỉ hiển thị danh sách đề khi kích chọn vào một thư mục cụ thể (hoặc khi tìm kiếm) */}
+            {(selectedFolderFilter !== '' || bankSearchQuery.trim() !== '') &&
+              (() => {
+                const filteredExams = savedBankExams.filter((item) => {
+                  if (selectedFolderFilter !== '' && item.folderId !== selectedFolderFilter) {
+                    return false;
+                  }
+                  if (bankSearchQuery.trim()) {
+                    const q = bankSearchQuery.toLowerCase();
+                    return (
+                      item.examData.title.toLowerCase().includes(q) ||
+                      item.examData.subject.toLowerCase().includes(q) ||
+                      item.examData.examId.toLowerCase().includes(q) ||
+                      (item.onlineExamCode || '').toLowerCase().includes(q)
+                    );
+                  }
+                  return true;
+                });
 
-              return (
-                <div className="pt-2 space-y-2.5">
-                  <div className="flex items-center justify-between text-xs text-slate-400 font-mono">
-                    <span>
-                      Đang hiển thị {filteredExams.length} đề thi trong{' '}
-                      {selectedFolderFilter === 'ALL'
-                        ? 'Tất cả thư mục'
-                        : `thư mục [${
-                            bankFolders.find((f) => f.id === selectedFolderFilter)?.code ||
-                            selectedFolderFilter
-                          }]`}
-                    </span>
-                    <span>Chọn đề bất kỳ để Kiểm định, Trộn đề hoặc Giao mã bài thi</span>
-                  </div>
+                const activeFolderObj = bankFolders.find((f) => f.id === selectedFolderFilter);
 
-                  {filteredExams.length === 0 ? (
-                    <div className="p-6 rounded-xl bg-slate-950/50 border border-slate-800/80 text-center text-sm text-slate-400">
-                      Chưa có đề thi nào trong thư mục này. Hãy tải đề lên ở{' '}
-                      <strong className="text-violet-300">Nhóm chức năng 2 (Bước 1 → Bước 3)</strong>{' '}
-                      bên dưới để lưu đề vào kho.
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1">
-                      {filteredExams.map((item) => {
-                        const folderMeta =
-                          bankFolders.find((f) => f.id === item.folderId) || bankFolders[0];
-                        const isCurrentActive = item.examData.examId === examData.examId && item.examData.title === examData.title;
-                        return (
-                          <div
-                            key={item.id}
-                            className={`p-3.5 rounded-xl border flex flex-col justify-between gap-3 transition-all ${
-                              isCurrentActive
-                                ? 'bg-indigo-950/60 border-violet-500/70'
-                                : 'bg-slate-950/60 border-slate-800/90 hover:border-slate-700'
-                            }`}
+                return (
+                  <div className="pt-2 space-y-2.5 animate-in fade-in duration-150">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 font-mono">
+                      <span>
+                        Đang hiển thị {filteredExams.length} đề thi trong{' '}
+                        {activeFolderObj
+                          ? `thư mục [${activeFolderObj.code} — ${activeFolderObj.name}]`
+                          : 'kết quả tìm kiếm'}
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <span>Chọn đề bất kỳ để Kiểm định, Trộn đề hoặc Giao mã bài thi</span>
+                        {selectedFolderFilter !== '' && (
+                          <button
+                            type="button"
+                            onClick={() => setSelectedFolderFilter('')}
+                            className="text-violet-300 hover:text-white underline font-sans font-semibold"
                           >
-                            <div className="space-y-1.5">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <span
-                                  className={`inline-flex items-center gap-1 text-[11px] font-mono font-bold px-2 py-0.5 rounded border ${folderMeta.badgeClass}`}
-                                >
-                                  <Folder className="w-3 h-3" />
-                                  {folderMeta.code}
-                                </span>
-                                <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
-                                  {item.onlineExamCode && (
-                                    <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-700/50 font-bold">
-                                      Mã thi: {item.onlineExamCode}
-                                    </span>
-                                  )}
-                                  <span>Lưu: {item.savedAt}</span>
+                            Thu gọn
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {filteredExams.length === 0 ? (
+                      <div className="p-6 rounded-xl bg-slate-950/50 border border-slate-800/80 text-center text-sm text-slate-400">
+                        Chưa có đề thi nào trong thư mục này. Hãy tải đề lên ở{' '}
+                        <strong className="text-violet-300">Nhóm chức năng 2 (Bước 1 → Bước 3)</strong>{' '}
+                        bên dưới để lưu đề vào kho.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1">
+                        {filteredExams.map((item) => {
+                          const folderMeta =
+                            bankFolders.find((f) => f.id === item.folderId) || bankFolders[0];
+                          const isCurrentActive =
+                            item.examData.examId === examData.examId &&
+                            item.examData.title === examData.title;
+                          return (
+                            <div
+                              key={item.id}
+                              className={`p-3.5 rounded-xl border flex flex-col justify-between gap-3 transition-all ${
+                                isCurrentActive
+                                  ? 'bg-indigo-950/60 border-violet-500/70'
+                                  : 'bg-slate-950/60 border-slate-800/90 hover:border-slate-700'
+                              }`}
+                            >
+                              <div className="space-y-1.5">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span
+                                    className={`inline-flex items-center gap-1 text-[11px] font-mono font-bold px-2 py-0.5 rounded border ${folderMeta.badgeClass}`}
+                                  >
+                                    <Folder className="w-3 h-3" />
+                                    {folderMeta.code}
+                                  </span>
+                                  <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
+                                    {item.onlineExamCode && (
+                                      <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-700/50 font-bold">
+                                        Mã thi: {item.onlineExamCode}
+                                      </span>
+                                    )}
+                                    <span>Lưu: {item.savedAt}</span>
+                                  </div>
+                                </div>
+                                <div className="text-sm font-bold text-white line-clamp-1">
+                                  {item.examData.title}
+                                </div>
+                                <div className="text-xs text-slate-400 font-mono">
+                                  Môn: {item.examData.subject} · {item.examData.durationMinutes} phút ·
+                                  Phần I: {item.examData.part1.length}c · Phần II:{' '}
+                                  {item.examData.part2.length}c · Phần III:{' '}
+                                  {item.examData.part3.length}c
                                 </div>
                               </div>
-                              <div className="text-sm font-bold text-white line-clamp-1">
-                                {item.examData.title}
-                              </div>
-                              <div className="text-xs text-slate-400 font-mono">
-                                Môn: {item.examData.subject} · {item.examData.durationMinutes} phút ·
-                                Phần I: {item.examData.part1.length}c · Phần II:{' '}
-                                {item.examData.part2.length}c · Phần III:{' '}
-                                {item.examData.part3.length}c
-                              </div>
-                            </div>
 
-                            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
-                              <div className="flex flex-wrap items-center gap-1.5">
+                              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleLoadSavedBankItem(item, 'inspect')}
+                                    className="px-2.5 py-1 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition-colors"
+                                  >
+                                    Kiểm định đề
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleLoadSavedBankItem(item, 'scrambler')}
+                                    className="px-2.5 py-1 text-xs font-semibold bg-violet-600/30 hover:bg-violet-600/50 text-violet-200 border border-violet-500/40 rounded-lg transition-colors"
+                                  >
+                                    Trộn đề
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleLoadSavedBankItem(item, 'online_code')}
+                                    className="px-2.5 py-1 text-xs font-semibold bg-emerald-600/25 hover:bg-emerald-600/40 text-emerald-200 border border-emerald-500/40 rounded-lg transition-colors"
+                                  >
+                                    Mã bài thi
+                                  </button>
+                                </div>
                                 <button
                                   type="button"
-                                  onClick={() => handleLoadSavedBankItem(item, 'inspect')}
-                                  className="px-2.5 py-1 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg transition-colors"
+                                  onClick={() => handleDeleteSavedBankItem(item.id)}
+                                  title="Xoá đề khỏi thư mục"
+                                  className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
                                 >
-                                  Kiểm định đề
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleLoadSavedBankItem(item, 'scrambler')}
-                                  className="px-2.5 py-1 text-xs font-semibold bg-violet-600/30 hover:bg-violet-600/50 text-violet-200 border border-violet-500/40 rounded-lg transition-colors"
-                                >
-                                  Trộn đề
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleLoadSavedBankItem(item, 'online_code')}
-                                  className="px-2.5 py-1 text-xs font-semibold bg-emerald-600/25 hover:bg-emerald-600/40 text-emerald-200 border border-emerald-500/40 rounded-lg transition-colors"
-                                >
-                                  Mã bài thi
+                                  <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteSavedBankItem(item.id)}
-                                title="Xoá đề khỏi thư mục"
-                                className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
           </div>
 
           {/* =================================================================
@@ -5402,27 +5458,68 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="block text-xs sm:text-sm font-semibold text-slate-200">
-                        3. Lớp:
-                      </label>
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="block text-xs sm:text-sm font-semibold text-slate-200">
+                          3. Lớp (Kích chọn lớp hoặc bấm × để xoá lớp cũ):
+                        </label>
+                      </div>
                       <div className="flex flex-wrap items-center gap-1.5 p-2 rounded-xl bg-slate-900 border border-slate-700 min-h-[44px]">
                         {availableClasses.map((cls) => {
                           const active = selectedOnlineClasses.includes(cls);
                           return (
-                            <button
+                            <div
                               key={cls}
-                              type="button"
-                              onClick={() => handleToggleOnlineClass(cls)}
-                              className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition-colors ${
+                              className={`inline-flex items-center rounded-lg text-xs font-mono font-bold transition-colors overflow-hidden border ${
                                 active
-                                  ? 'bg-violet-600 text-white'
-                                  : 'bg-slate-800 text-slate-400 hover:text-white'
+                                  ? 'bg-violet-600 text-white border-violet-400'
+                                  : 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
                               }`}
                             >
-                              {cls}
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => handleToggleOnlineClass(cls)}
+                                className="px-2.5 py-1 hover:opacity-90 transition-opacity"
+                              >
+                                {cls}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => handleDeleteOnlineClass(cls, e)}
+                                title={`Xoá lớp ${cls}`}
+                                className={`px-1.5 py-1 border-l transition-colors ${
+                                  active
+                                    ? 'border-violet-400/50 text-violet-100 hover:bg-rose-600 hover:text-white'
+                                    : 'border-slate-700 text-slate-400 hover:bg-rose-600 hover:text-white'
+                                }`}
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
                           );
                         })}
+                        <div className="flex items-center gap-1 ml-auto">
+                          <input
+                            type="text"
+                            value={newClassNameInput}
+                            onChange={(e) => setNewClassNameInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleAddCustomClass();
+                              }
+                            }}
+                            placeholder="+ Tên lớp..."
+                            className="w-24 px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-xs font-mono text-white focus:outline-none focus:border-violet-500"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleAddCustomClass}
+                            className="px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white shrink-0"
+                            title="Thêm lớp mới"
+                          >
+                            + Thêm
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -5507,6 +5604,10 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                           Nếu học sinh chuyển Tab hoặc thoát Toàn màn hình vượt số lần quy định, hệ thống tự động <strong>thu bài cưỡng chế</strong> ngay lập tức:
                         </p>
 
+                        <div className="p-2.5 rounded-xl bg-rose-950/70 border border-rose-500/40 text-xs text-rose-200 font-medium leading-relaxed">
+                          🔀 <strong>Tự động xáo trộn ngẫu nhiên:</strong> Hệ thống tự động xáo trộn thứ tự các câu hỏi trong mỗi phần và thứ tự đáp án trong mỗi câu riêng biệt cho từng học sinh (giữ nguyên thứ tự Phần I → Phần II → Phần III) để học sinh ngồi cạnh nhau không trùng đề.
+                        </div>
+
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                           {(
                             [
@@ -5580,8 +5681,9 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                           Dành cho học sinh tự luyện tập tại nhà hoặc trên lớp: <strong>Không thu bài cưỡng chế</strong> khi chuyển cửa sổ, đồng thời mở đầy đủ <strong>Lời giải chi tiết & Đáp án từng câu</strong> ngay sau khi nộp bài.
                         </p>
 
-                        <div className="p-3 rounded-xl bg-slate-950/80 border border-emerald-800/60 text-xs text-emerald-300 font-mono">
-                          ✓ Mở toàn bộ lời giải chi tiết sau khi nộp bài · Không giới hạn số lần cảnh báo.
+                        <div className="p-3 rounded-xl bg-slate-950/80 border border-emerald-800/60 text-xs text-emerald-300 font-mono space-y-1">
+                          <div>✓ Giữ nguyên thứ tự câu hỏi và đáp án gốc (không xáo trộn).</div>
+                          <div>✓ Mở toàn bộ lời giải chi tiết sau khi nộp bài · Không giới hạn số lần cảnh báo.</div>
                         </div>
                       </div>
                     </div>
@@ -5644,11 +5746,11 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                   {/* 1. Mã bài thi & 2. Đường Link bài thi */}
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
                     {/* Mã bài thi */}
-                    <div className="lg:col-span-5 p-5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-3">
+                    <div className="lg:col-span-5 p-5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-3 overflow-hidden">
                       <label className="block text-xs sm:text-sm font-bold text-violet-300">
                         1. Mã bài thi (Học sinh nhập tại Cổng Học Sinh):
                       </label>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full">
                         <input
                           type="text"
                           value={onlineDispatchCode}
@@ -5661,7 +5763,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                               );
                             }
                           }}
-                          className="flex-1 px-4 py-2.5 rounded-xl bg-slate-950 border border-violet-600/70 text-lg font-mono font-extrabold text-amber-300 text-center focus:outline-none focus:border-violet-400"
+                          className="min-w-0 flex-1 px-3 py-2.5 rounded-xl bg-slate-950 border border-violet-600/70 text-lg font-mono font-extrabold text-amber-300 text-center focus:outline-none focus:border-violet-400"
                           placeholder="1102"
                         />
                         <button
@@ -5687,16 +5789,16 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                             setCopiedDispatchCode(true);
                             window.setTimeout(() => setCopiedDispatchCode(false), 2000);
                           }}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white shrink-0"
+                          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white whitespace-nowrap shrink-0 shadow-sm"
                         >
                           {copiedDispatchCode ? (
                             <>
-                              <Check className="w-3.5 h-3.5" />
+                              <Check className="w-3.5 h-3.5 shrink-0" />
                               <span>Đã chép</span>
                             </>
                           ) : (
                             <>
-                              <Copy className="w-3.5 h-3.5" />
+                              <Copy className="w-3.5 h-3.5 shrink-0" />
                               <span>Sao chép mã</span>
                             </>
                           )}
@@ -5705,16 +5807,16 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                     </div>
 
                     {/* Đường Link bài thi */}
-                    <div className="lg:col-span-7 p-5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-3">
+                    <div className="lg:col-span-7 p-5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-3 overflow-hidden">
                       <label className="block text-xs sm:text-sm font-bold text-emerald-300">
                         2. Đường Link bài thi trực tuyến (Gửi qua Zalo / Nhóm lớp):
                       </label>
-                      <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+                      <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 w-full">
                         <input
                           type="text"
                           readOnly
                           value={computedOnlineExamLink}
-                          className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm font-mono text-sky-300 focus:outline-none"
+                          className="min-w-0 flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm font-mono text-sky-300 focus:outline-none"
                         />
                         <button
                           type="button"
@@ -5723,16 +5825,16 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                             setCopiedDispatchLink(true);
                             window.setTimeout(() => setCopiedDispatchLink(false), 2000);
                           }}
-                          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white whitespace-nowrap shrink-0"
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white whitespace-nowrap shrink-0 shadow-sm"
                         >
                           {copiedDispatchLink ? (
                             <>
-                              <Check className="w-3.5 h-3.5" />
+                              <Check className="w-3.5 h-3.5 shrink-0" />
                               <span>Đã chép Link</span>
                             </>
                           ) : (
                             <>
-                              <Copy className="w-3.5 h-3.5" />
+                              <Copy className="w-3.5 h-3.5 shrink-0" />
                               <span>Sao chép Link</span>
                             </>
                           )}
@@ -5746,10 +5848,10 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div>
                         <label className="block text-sm font-bold text-white">
-                          3. Chọn Lớp Giao Bài & Thêm Lớp Mới:
+                          3. Chọn Lớp Giao Bài & Thêm / Xoá Lớp Học:
                         </label>
                         <p className="text-xs text-slate-400">
-                          Kích chọn các lớp được phép tham gia bài thi này ({selectedOnlineClasses.length} lớp đang chọn: {selectedOnlineClasses.join(', ')}).
+                          Kích vào tên lớp để chọn/bỏ chọn giao bài ({selectedOnlineClasses.length} lớp đang chọn: {selectedOnlineClasses.join(', ') || 'Chưa chọn'}) · Bấm nút <strong>×</strong> cạnh tên lớp để xoá lớp cũ khi cập nhật phân công theo năm học.
                         </p>
                       </div>
 
@@ -5780,24 +5882,47 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 pt-1">
-                      {availableClasses.map((cls) => {
-                        const isSelected = selectedOnlineClasses.includes(cls);
-                        return (
-                          <button
-                            key={cls}
-                            type="button"
-                            onClick={() => handleToggleOnlineClass(cls)}
-                            className={`px-3.5 py-2 rounded-xl text-xs sm:text-sm font-mono font-bold border transition-all flex items-center gap-1.5 ${
-                              isSelected
-                                ? 'bg-violet-600 text-white border-violet-400 shadow-sm'
-                                : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
-                            }`}
-                          >
-                            <span>Lớp {cls}</span>
-                            {isSelected && <Check className="w-3.5 h-3.5" />}
-                          </button>
-                        );
-                      })}
+                      {availableClasses.length === 0 ? (
+                        <span className="text-xs text-slate-400 italic">
+                          Chưa có lớp nào trong danh sách. Hãy nhập tên lớp vào ô bên phải và nhấn &ldquo;+ Thêm Lớp&rdquo;.
+                        </span>
+                      ) : (
+                        availableClasses.map((cls) => {
+                          const isSelected = selectedOnlineClasses.includes(cls);
+                          return (
+                            <div
+                              key={cls}
+                              className={`inline-flex items-center rounded-xl text-xs sm:text-sm font-mono font-bold border transition-all overflow-hidden ${
+                                isSelected
+                                  ? 'bg-violet-600 text-white border-violet-400 shadow-sm'
+                                  : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white hover:border-slate-700'
+                              }`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleToggleOnlineClass(cls)}
+                                className="px-3.5 py-2 flex items-center gap-1.5 hover:opacity-90 transition-opacity"
+                              >
+                                <span>Lớp {cls}</span>
+                                {isSelected && <Check className="w-3.5 h-3.5 shrink-0" />}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => handleDeleteOnlineClass(cls, e)}
+                                title={`Xoá lớp ${cls} khỏi danh sách`}
+                                aria-label={`Xoá lớp ${cls}`}
+                                className={`px-2.5 py-2 border-l transition-colors flex items-center justify-center ${
+                                  isSelected
+                                    ? 'border-violet-400/50 text-violet-100 hover:bg-rose-600 hover:text-white'
+                                    : 'border-slate-800 text-slate-400 hover:bg-rose-600 hover:text-white'
+                                }`}
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
                   </div>
 

@@ -21,6 +21,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  ExamData,
   ExamGradeReport,
   OnlineExamAssignment,
   SavedExamSession,
@@ -33,16 +34,28 @@ import {
   gradeStudentExam,
   isQuestionFullyCompleted,
   isQuestionPartiallyCompleted,
+  restoreUnshuffledVariant,
+  shuffleVariantForStudent,
 } from '../utils/scramblerAndGrader';
 import { getResolvedQuestionImage } from '../utils/examDocumentParser';
 import { MathText } from './MathText';
-import { fetchExamFromCloud } from '../services/api';
+import { ProgressBar } from './ExamProgressBar';
+import {
+  fetchExamFromCloud,
+  fetchLatestExamsFromCloud,
+  normalizeCloudExamRecord,
+} from '../services/api';
 
 interface StudentExamEnvironmentProps {
   variants: ScrambledExamVariant[];
   initialExamCode?: string;
   onSessionUpdate: (session: SavedExamSession) => void;
   onlineAssignments?: OnlineExamAssignment[];
+  onCloudExamLoaded?: (normalized: {
+    examData: ExamData;
+    variants: ScrambledExamVariant[];
+    assignment: OnlineExamAssignment;
+  }) => void;
 }
 
 const STORAGE_PREFIX = 'smarttest_gdpt2018_session_';
@@ -63,6 +76,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   initialExamCode,
   onSessionUpdate,
   onlineAssignments = [],
+  onCloudExamLoaded,
 }) => {
   // Entrance Gate fields (left blank by default so students must fill/select all 3 fields)
   const [studentName, setStudentName] = useState<string>('');
@@ -71,6 +85,9 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
     initialExamCode || ''
   );
   const [gateError, setGateError] = useState<string | null>(null);
+  const [cloudVariant, setCloudVariant] = useState<ScrambledExamVariant | null>(null);
+  const [cloudAssignment, setCloudAssignment] = useState<OnlineExamAssignment | null>(null);
+  const [isSyncingCloudExam, setIsSyncingCloudExam] = useState<boolean>(false);
 
   // Active Exam State
   const [isExamActive, setIsExamActive] = useState<boolean>(false);
@@ -82,6 +99,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const [remainingSeconds, setRemainingSeconds] = useState<number>(50 * 60);
   const [lastSavedTime, setLastSavedTime] = useState<string>('');
   const [startedAtIso, setStartedAtIso] = useState<string>('');
+  const [studentShuffleSeed, setStudentShuffleSeed] = useState<string>('INIT-SEED');
 
   // Anti-cheat & Kiosk State
   const [violations, setViolations] = useState<ViolationEvent[]>([]);
@@ -97,6 +115,10 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const [reviewFilter, setReviewFilter] = useState<'ALL' | 'INCORRECT' | 'PART_I' | 'PART_II' | 'PART_III'>('ALL');
 
   const questionRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const onCloudExamLoadedRef = useRef(onCloudExamLoaded);
+  useEffect(() => {
+    onCloudExamLoadedRef.current = onCloudExamLoaded;
+  }, [onCloudExamLoaded]);
 
   useEffect(() => {
     if (initialExamCode) {
@@ -104,26 +126,109 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
     }
   }, [initialExamCode]);
 
+  // Automatically fetch latest assigned exam or specific exam code from MongoDB Atlas
+  useEffect(() => {
+    let isMounted = true;
+    const cleanCode = selectedCode.trim();
+
+    const timer = window.setTimeout(async () => {
+      try {
+        if (cleanCode) {
+          const doc = await fetchExamFromCloud(cleanCode);
+          if (!isMounted || !doc) return;
+          const norm = normalizeCloudExamRecord(doc, cleanCode);
+          if (norm && norm.variants.length > 0) {
+            const matchedVar =
+              norm.variants.find(
+                (v) => v.code.trim().toUpperCase() === cleanCode.toUpperCase()
+              ) || norm.variants[0];
+            setCloudVariant(matchedVar);
+            setCloudAssignment(norm.assignment);
+            onCloudExamLoadedRef.current?.(norm);
+          }
+        } else {
+          const res = await fetchLatestExamsFromCloud();
+          if (!isMounted || !res?.latestExam) return;
+          const norm = normalizeCloudExamRecord(res.latestExam);
+          if (norm && norm.variants.length > 0) {
+            setCloudVariant(norm.variants[0]);
+            setCloudAssignment(norm.assignment);
+            onCloudExamLoadedRef.current?.(norm);
+          }
+        }
+      } catch {
+        // Keep existing state if offline
+      }
+    }, 220);
+
+    return () => {
+      isMounted = false;
+      window.clearTimeout(timer);
+    };
+  }, [selectedCode]);
+
   const matchedOnlineAssignment = useMemo<OnlineExamAssignment | null>(() => {
     const cleanCode = selectedCode.trim().toUpperCase();
     if (cleanCode) {
+      if (
+        cloudAssignment &&
+        cloudAssignment.examCode.trim().toUpperCase() === cleanCode
+      ) {
+        return cloudAssignment;
+      }
       const found = onlineAssignments.find(
         (a) => a.examCode.trim().toUpperCase() === cleanCode
       );
       if (found) return found;
     }
-    return onlineAssignments[0] || null;
-  }, [onlineAssignments, selectedCode]);
+    return cloudAssignment || onlineAssignments[0] || null;
+  }, [onlineAssignments, selectedCode, cloudAssignment]);
 
   const activeVariant = useMemo(() => {
     const cleanCode = selectedCode.trim();
-    if (!cleanCode) return variants[0];
-    const matched = variants.find(
-      (v) => v.code.trim().toUpperCase() === cleanCode.toUpperCase()
-    );
-    if (matched) return matched;
-    return variants[0] ? { ...variants[0], code: cleanCode } : variants[0];
-  }, [variants, selectedCode]);
+    let rawBaseVariant: ScrambledExamVariant | undefined;
+
+    if (
+      cloudVariant &&
+      (!cleanCode ||
+        cloudVariant.code.trim().toUpperCase() === cleanCode.toUpperCase())
+    ) {
+      rawBaseVariant = cloudVariant;
+    } else if (!cleanCode) {
+      rawBaseVariant = cloudVariant || variants[0];
+    } else {
+      const matched = variants.find(
+        (v) => v.code.trim().toUpperCase() === cleanCode.toUpperCase()
+      );
+      if (matched) {
+        rawBaseVariant = matched;
+      } else if (cloudVariant) {
+        rawBaseVariant = { ...cloudVariant, code: cleanCode };
+      } else {
+        rawBaseVariant = variants[0] ? { ...variants[0], code: cleanCode } : variants[0];
+      }
+    }
+
+    if (!rawBaseVariant) return rawBaseVariant;
+
+    // Chế độ ôn tập: giữ nguyên thứ tự các câu hỏi và đáp án gốc (không xáo trộn)
+    if (matchedOnlineAssignment?.mode === 'practice') {
+      return restoreUnshuffledVariant(rawBaseVariant, matchedOnlineAssignment?.examData);
+    }
+
+    // Chế độ kiểm tra: tự động xáo trộn ngẫu nhiên thứ tự câu hỏi trong mỗi phần
+    // và thứ tự đáp án trong mỗi câu (giữ nguyên thứ tự các phần I -> II -> III)
+    const effectiveSeed = `${studentId.trim().toUpperCase() || 'GUEST'}-${studentName.trim().toUpperCase() || 'STUDENT'}-${cleanCode.toUpperCase()}-${studentShuffleSeed}`;
+    return shuffleVariantForStudent(rawBaseVariant, effectiveSeed);
+  }, [
+    variants,
+    selectedCode,
+    cloudVariant,
+    matchedOnlineAssignment,
+    studentId,
+    studentName,
+    studentShuffleSeed,
+  ]);
 
   // Check if there is an existing saved session in localStorage for current SBD + ExamCode
   const detectedSavedSession = useMemo<SavedExamSession | null>(() => {
@@ -147,6 +252,24 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const completedCount = useMemo(() => {
     if (!activeVariant) return 0;
     return countCompletedQuestions(activeVariant, answers);
+  }, [activeVariant, answers]);
+
+  const partCompletionStats = useMemo(() => {
+    if (!activeVariant) {
+      return { p1Done: 0, p2Done: 0, p3Done: 0 };
+    }
+    const p1Len = activeVariant.part1.length;
+    const p2Len = activeVariant.part2.length;
+    const p1Done = activeVariant.part1.filter((_, idx) =>
+      isQuestionFullyCompleted(activeVariant, answers, idx + 1)
+    ).length;
+    const p2Done = activeVariant.part2.filter((_, idx) =>
+      isQuestionFullyCompleted(activeVariant, answers, p1Len + idx + 1)
+    ).length;
+    const p3Done = activeVariant.part3.filter((_, idx) =>
+      isQuestionFullyCompleted(activeVariant, answers, p1Len + p2Len + idx + 1)
+    ).length;
+    return { p1Done, p2Done, p3Done };
   }, [activeVariant, answers]);
 
   const flaggedCount = useMemo(() => {
@@ -380,17 +503,50 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
   // Start Fresh or Resume Exam
   const handleStartExam = async (resumeSaved: boolean) => {
-    if (!studentName.trim() || !studentId.trim() || !selectedCode.trim()) {
+    const cleanCode = selectedCode.trim();
+    if (!studentName.trim() || !studentId.trim() || !cleanCode) {
       setGateError('Vui lòng nhập đầy đủ Họ và tên thí sinh, Số báo danh (SBD) và chọn Mã bài thi để vào phòng thi.');
       return;
     }
     setGateError(null);
     setForcedSubmitBanner(null);
+    setIsSyncingCloudExam(true);
+
+    let resolvedVariant: ScrambledExamVariant | undefined = activeVariant;
+    let resolvedAssignment: OnlineExamAssignment | null = matchedOnlineAssignment;
+
+    try {
+      const cloudDoc = await fetchExamFromCloud(cleanCode);
+      if (cloudDoc) {
+        const norm = normalizeCloudExamRecord(cloudDoc, cleanCode);
+        if (norm && norm.variants.length > 0) {
+          const matchedVar =
+            norm.variants.find(
+              (v) => v.code.trim().toUpperCase() === cleanCode.toUpperCase()
+            ) || { ...norm.variants[0], code: cleanCode };
+          resolvedVariant = matchedVar;
+          resolvedAssignment = norm.assignment;
+          setCloudVariant(matchedVar);
+          setCloudAssignment(norm.assignment);
+          onCloudExamLoadedRef.current?.(norm);
+        }
+      }
+    } catch {
+      // Fallback to currently available variant if offline
+    } finally {
+      setIsSyncingCloudExam(false);
+    }
 
     const configuredDurationMinutes =
-      matchedOnlineAssignment?.durationMinutes || activeVariant?.durationMinutes || 50;
+      resolvedAssignment?.durationMinutes || resolvedVariant?.durationMinutes || 50;
+
+    const seedStorageKey = `${getStorageKey(studentId, cleanCode)}_seed`;
 
     if (resumeSaved && detectedSavedSession) {
+      const savedSeed = localStorage.getItem(seedStorageKey);
+      if (savedSeed) {
+        setStudentShuffleSeed(savedSeed);
+      }
       setAnswers(detectedSavedSession.answers);
       setRemainingSeconds(
         detectedSavedSession.remainingSeconds > 0
@@ -404,6 +560,13 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
         setShowScorecardModal(true);
       }
     } else {
+      const freshSeed = `${studentId.trim().toUpperCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setStudentShuffleSeed(freshSeed);
+      try {
+        localStorage.setItem(seedStorageKey, freshSeed);
+      } catch {
+        // Ignore storage quota errors
+      }
       setAnswers(EMPTY_ANSWERS);
       setRemainingSeconds(configuredDurationMinutes * 60);
       setViolations([]);
@@ -412,7 +575,6 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
       setShowScorecardModal(false);
     }
 
-    void fetchExamFromCloud(selectedCode.trim());
     await enterFullscreen();
     setIsExamActive(true);
   };
@@ -420,6 +582,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const handleClearSavedSession = () => {
     if (!studentId.trim() || !selectedCode) return;
     localStorage.removeItem(getStorageKey(studentId, selectedCode));
+    localStorage.removeItem(`${getStorageKey(studentId, selectedCode)}_seed`);
     setAnswers(EMPTY_ANSWERS);
     setViolations([]);
     setIsSubmitted(false);
@@ -525,39 +688,28 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   // =========================================================================
   if (!isExamActive) {
     return (
-      <div className="max-w-5xl mx-auto px-6 py-10 space-y-8">
-        <div className="bg-[#18182e] border border-indigo-900/80 rounded-2xl p-6 sm:p-10 space-y-8">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-6">
-            <div className="space-y-1.5">
-              <div className="text-xs font-medium text-violet-400">
-                Cổng Thi Trực Tuyến Phòng Máy Kiosk · Chuẩn Đánh Giá Bộ GD&ĐT (GDPT 2018)
-              </div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-                Phòng Thi & Kiểm Tra Trực Tuyến — SmartTest Kiosk
-              </h1>
-              <p className="text-xs sm:text-sm text-slate-400">
-                Xác thực thông tin thí sinh, chọn mã bài thi được phát và kích hoạt chế độ khóa màn hình chống gian lận.
-              </p>
-            </div>
-
-            <div className="px-4 py-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs font-mono space-y-1 shrink-0">
-              <div className="text-slate-400">Trạng thái máy trạm:</div>
-              <div className="text-emerald-400 font-bold">SẴN SÀNG KẾT NỐI LAN</div>
-              <div className="text-slate-500">Auto-Save LocalStorage: Bật</div>
-            </div>
+      <div className="w-full max-w-5xl mx-auto px-3 sm:px-6 py-6 sm:py-10 space-y-6 sm:space-y-8 overflow-x-hidden">
+        <div className="bg-[#18182e] border-2 border-indigo-800/80 rounded-2xl p-5 sm:p-10 shadow-xl space-y-6 sm:space-y-8">
+          <div className="flex flex-col items-center text-center space-y-2.5 border-b border-slate-800 pb-6">
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white tracking-tight leading-tight">
+              Phòng Thi & Kiểm Tra Trực Tuyến — SmartTest
+            </h1>
+            <p className="text-sm sm:text-base font-semibold text-slate-300 max-w-3xl">
+              Xác thực thông tin thí sinh, chọn mã bài thi được phát và kích hoạt chế độ bắt đầu làm bài
+            </p>
           </div>
 
           {gateError && (
-            <div className="p-3.5 rounded-lg bg-rose-950/80 border border-rose-700 text-rose-200 text-xs flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+            <div className="p-4 rounded-xl bg-rose-950/80 border border-rose-700 text-rose-200 text-sm font-bold flex items-center gap-2.5">
+              <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0" />
               <span>{gateError}</span>
             </div>
           )}
 
           {/* Student Form Grid */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-300">
+            <div className="space-y-2.5">
+              <label className="block text-sm sm:text-base font-extrabold text-white tracking-tight">
                 1. Họ và tên thí sinh
               </label>
               <input
@@ -565,12 +717,12 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                 value={studentName}
                 onChange={(e) => setStudentName(e.target.value)}
                 placeholder="Nhập họ và tên thí sinh..."
-                className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white text-sm focus:outline-none focus:border-violet-500"
+                className="w-full px-4 py-3.5 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-bold text-sm sm:text-base focus:outline-none focus:border-violet-500 transition-colors"
               />
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-300">
+            <div className="space-y-2.5">
+              <label className="block text-sm sm:text-base font-extrabold text-white tracking-tight">
                 2. Số báo danh (SBD)
               </label>
               <input
@@ -578,12 +730,12 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                 value={studentId}
                 onChange={(e) => setStudentId(e.target.value)}
                 placeholder="Nhập số báo danh..."
-                className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-sm focus:outline-none focus:border-violet-500"
+                className="w-full px-4 py-3.5 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono font-bold text-sm sm:text-base focus:outline-none focus:border-violet-500 transition-colors"
               />
             </div>
 
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-300">
+            <div className="space-y-2.5">
+              <label className="block text-sm sm:text-base font-extrabold text-white tracking-tight">
                 3. Chọn Mã bài thi
               </label>
               <input
@@ -591,7 +743,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                 value={selectedCode}
                 onChange={(e) => setSelectedCode(e.target.value)}
                 placeholder="Nhập mã bài thi được nhận..."
-                className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white font-mono text-sm focus:outline-none focus:border-violet-500"
+                className="w-full px-4 py-3.5 rounded-xl bg-slate-950 border-2 border-slate-700 text-white font-mono font-bold text-sm sm:text-base focus:outline-none focus:border-violet-500 transition-colors"
               />
             </div>
           </div>
@@ -600,11 +752,11 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
           {detectedSavedSession && (
             <div className="p-5 rounded-xl bg-indigo-950/60 border border-indigo-500/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="space-y-1">
-                <div className="text-xs font-semibold text-indigo-300 flex items-center gap-1.5">
-                  <Save className="w-3.5 h-3.5" />
+                <div className="text-xs sm:text-sm font-bold text-indigo-300 flex items-center gap-1.5">
+                  <Save className="w-4 h-4" />
                   <span>Phát hiện dữ liệu bài làm đã lưu tự động (Chống mất bài khi rớt mạng)</span>
                 </div>
-                <div className="text-xs text-slate-300 font-mono tabular-nums">
+                <div className="text-xs sm:text-sm text-slate-200 font-mono font-semibold tabular-nums">
                   Thí sinh: {detectedSavedSession.studentName} · SBD: {detectedSavedSession.studentId} · Mã đề:{' '}
                   {detectedSavedSession.examCode} · Lưu lúc: {detectedSavedSession.lastSavedAt} · Thời gian còn:{' '}
                   {formatCountdown(detectedSavedSession.remainingSeconds)}
@@ -614,14 +766,14 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                 <button
                   type="button"
                   onClick={() => handleStartExam(true)}
-                  className="px-4 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  className="px-4 py-2 text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
                 >
                   Khôi Phục Tiếp Tục Thi
                 </button>
                 <button
                   type="button"
                   onClick={handleClearSavedSession}
-                  className="px-3 py-2 text-xs font-medium bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  className="px-3 py-2 text-xs sm:text-sm font-bold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
                 >
                   Xoá Phiên Cũ
                 </button>
@@ -631,12 +783,12 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
           {/* Synchronized Online Exam Assignment Banner (when teacher has configured Tab 4) */}
           {selectedCode.trim() && matchedOnlineAssignment && (
-            <div className="p-4 rounded-xl bg-violet-950/40 border border-violet-600/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div className="p-4 rounded-xl bg-violet-950/40 border border-violet-600/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm">
               <div className="space-y-1">
-                <div className="font-bold text-white text-sm">
+                <div className="font-extrabold text-white text-sm sm:text-base">
                   {matchedOnlineAssignment.examTitle} · Môn: {matchedOnlineAssignment.subject}
                 </div>
-                <div className="text-slate-300 font-mono">
+                <div className="text-slate-200 font-mono font-bold">
                   Lớp giao bài: {matchedOnlineAssignment.assignedClasses.join(', ')} · Thời gian làm bài:{' '}
                   {matchedOnlineAssignment.durationMinutes} phút
                 </div>
@@ -659,11 +811,11 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
           {/* Rules & Grading Summary */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-            <div className="p-5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
-              <div className="text-xs font-bold text-violet-300">
+            <div className="p-5 sm:p-6 rounded-2xl bg-slate-900/90 border-2 border-indigo-900/70 space-y-3 shadow-md">
+              <div className="text-sm sm:text-base font-extrabold text-violet-300">
                 Cấu Trúc Tính Điểm Chuẩn Bộ GD&ĐT (Thang 10,00 điểm)
               </div>
-              <ul className="space-y-1.5 text-xs text-slate-200 font-mono">
+              <ul className="space-y-2 text-xs sm:text-sm font-bold text-slate-100 leading-relaxed">
                 <li>
                   · Phần I ({activeVariant?.part1.length || 18} câu trắc nghiệm ABCD): +0,25 điểm / câu đúng.
                 </li>
@@ -676,11 +828,11 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               </ul>
             </div>
 
-            <div className="p-5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5">
-              <div className="text-xs font-bold text-amber-300">
-                Chế Độ Bảo Mật Phòng Máy SmartTest Kiosk
+            <div className="p-5 sm:p-6 rounded-2xl bg-slate-900/90 border-2 border-indigo-900/70 space-y-3 shadow-md">
+              <div className="text-sm sm:text-base font-extrabold text-amber-300">
+                Chế Độ Bảo Mật Phòng Máy SmartTest
               </div>
-              <ul className="space-y-1.5 text-xs text-slate-200">
+              <ul className="space-y-2 text-xs sm:text-sm font-bold text-slate-100 leading-relaxed">
                 <li>
                   · Tự động kích hoạt Toàn màn hình (Fullscreen) ngay khi bắt đầu làm bài.
                 </li>
@@ -698,8 +850,8 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
           </div>
 
           {/* Primary Start CTA */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4 border-t border-slate-800">
-            <div className="text-xs text-slate-400">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-5 border-t border-slate-800">
+            <div className="text-xs sm:text-sm font-bold text-slate-300">
               {selectedCode ? (
                 <>
                   Nhấn nút bên phải để vào phòng thi với <strong className="text-white">Mã bài thi {selectedCode}</strong>.
@@ -710,11 +862,16 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
             </div>
             <button
               type="button"
+              disabled={isSyncingCloudExam}
               onClick={() => handleStartExam(false)}
-              className="flex items-center justify-center gap-2.5 px-6 py-3.5 text-sm font-bold bg-violet-600 hover:bg-violet-500 text-white rounded-xl shadow-lg transition-colors whitespace-nowrap shrink-0"
+              className="w-full sm:w-auto flex items-center justify-center gap-2.5 px-6 sm:px-7 py-3.5 text-sm sm:text-base font-extrabold bg-violet-600 hover:bg-violet-500 disabled:opacity-60 text-white rounded-xl shadow-lg transition-colors shrink-0"
             >
-              <Play className="w-4 h-4 fill-current" />
-              <span>Start Exam · Bắt Đầu Làm Bài (Toàn Màn Hình)</span>
+              <Play className="w-4 h-4 fill-current shrink-0" />
+              <span className="truncate">
+                {isSyncingCloudExam
+                  ? 'Đang tải đề thi từ đám mây...'
+                  : 'Start Exam · Bắt Đầu Làm Bài'}
+              </span>
             </button>
           </div>
         </div>
@@ -731,9 +888,9 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const isIvory = paperTheme === 'ivory';
 
   return (
-    <div className="max-w-[1440px] mx-auto px-4 sm:px-6 py-6 select-none">
+    <div className="w-full max-w-[1440px] mx-auto px-2.5 sm:px-6 py-4 sm:py-6 select-none overflow-x-hidden">
       {/* Top Kiosk Security Bar */}
-      <div className="mb-6 px-4 py-3 rounded-xl bg-[#18182e] border border-indigo-900/80 flex flex-wrap items-center justify-between gap-4">
+      <div className="mb-4 sm:mb-6 px-3 sm:px-4 py-3 rounded-xl bg-[#18182e] border border-indigo-900/80 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2.5 text-xs">
           <span className="font-bold text-white flex items-center gap-1.5">
             <UserCheck className="w-4 h-4 text-violet-400" />
@@ -809,6 +966,19 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
         </div>
       </div>
 
+      {/* Visual Question Completion ProgressBar */}
+      <ProgressBar
+        completedCount={completedCount}
+        totalQuestionCount={totalQuestionCount}
+        flaggedCount={flaggedCount}
+        part1Completed={partCompletionStats.p1Done}
+        part1Total={p1Count}
+        part2Completed={partCompletionStats.p2Done}
+        part2Total={p2Count}
+        part3Completed={partCompletionStats.p3Done}
+        part3Total={activeVariant.part3.length}
+      />
+
       {/* Security Toast Alert (for blocked right-click / copy / F12) */}
       {securityToast && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-rose-950 border border-rose-500 text-rose-100 text-xs font-medium shadow-xl flex items-center gap-2">
@@ -818,23 +988,23 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
       )}
 
       {/* Main Split Grid: 70% Left Exam Questions / 30% Right Sticky Palette */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-start w-full max-w-full">
         {/* ===================================================================
             LEFT PANE (70% -> 8 of 12 columns): EXAM CONTENTS (PARTS I, II, III)
         =================================================================== */}
-        <div className="lg:col-span-8 space-y-8">
+        <div className="lg:col-span-8 space-y-6 sm:space-y-8 min-w-0 w-full max-w-full">
           {/* PART I SECTION */}
-          <section className="space-y-5">
-            <div className="px-6 py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
-              <h2 className="text-lg sm:text-xl font-bold text-white">
+          <section className="space-y-4 sm:space-y-5">
+            <div className="px-4 sm:px-6 py-4 sm:py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
+              <h2 className="text-base sm:text-xl font-bold text-white leading-snug">
                 PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (Từ câu 1 đến câu {p1Count})
               </h2>
-              <p className="text-sm sm:text-base text-indigo-200">
+              <p className="text-xs sm:text-base text-indigo-200 leading-relaxed">
                 Mỗi câu hỏi thí sinh chỉ chọn một phương án đúng nhất. Mỗi câu trả lời đúng được <span className="font-mono font-bold text-emerald-300">0,25 điểm</span>.
               </p>
             </div>
 
-            <div className="space-y-5">
+            <div className="space-y-4 sm:space-y-5">
               {activeVariant.part1.map((q, idx) => {
                 const globalNum = idx + 1;
                 const selectedOpt = answers.part1[q.id];
@@ -847,7 +1017,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`rounded-xl border-2 p-6 transition-colors space-y-5 ${
+                    className={`rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
@@ -998,17 +1168,17 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
           </section>
 
           {/* PART II SECTION */}
-          <section className="space-y-5">
-            <div className="px-6 py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
-              <h2 className="text-lg sm:text-xl font-bold text-white">
+          <section className="space-y-4 sm:space-y-5">
+            <div className="px-4 sm:px-6 py-4 sm:py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
+              <h2 className="text-base sm:text-xl font-bold text-white leading-snug">
                 PHẦN II. Câu trắc nghiệm đúng sai (Từ câu {p1Count + 1} đến câu {p1Count + p2Count})
               </h2>
-              <p className="text-sm sm:text-base text-indigo-200">
+              <p className="text-xs sm:text-base text-indigo-200 leading-relaxed">
                 Trong mỗi ý <span className="font-mono font-bold">a), b), c), d)</span> ở mỗi câu, thí sinh chọn <span className="font-bold text-emerald-300">[ĐÚNG]</span> hoặc <span className="font-bold text-amber-300">[SAI]</span>. Điểm từng câu: 1 ý đúng = 0,10đ · 2 ý đúng = 0,25đ · 3 ý đúng = 0,50đ · 4 ý đúng = 1,00đ.
               </p>
             </div>
 
-            <div className="space-y-5">
+            <div className="space-y-4 sm:space-y-5">
               {activeVariant.part2.map((q, idx) => {
                 const globalNum = p1Count + idx + 1;
                 const userSubMap = answers.part2[q.id] || {
@@ -1031,24 +1201,24 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`rounded-xl border-2 p-6 transition-colors space-y-5 ${
+                    className={`rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
                     }`}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3.5 border-slate-200/80 dark:border-slate-800">
-                      <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2.5 border-b pb-3 border-slate-200/80 dark:border-slate-800">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span
-                          className={`font-mono text-xl font-bold ${
+                          className={`font-mono text-lg sm:text-xl font-bold ${
                             isIvory ? 'text-[#4338ca]' : 'text-violet-400'
                           }`}
                         >
                           Câu {globalNum} (Phần II · Câu {q.displayNumber})
                         </span>
-                        <span aria-hidden="true" className="text-slate-400">·</span>
+                        <span aria-hidden="true" className="text-slate-400 hidden sm:inline">·</span>
                         <span
-                          className={`text-sm sm:text-base font-medium font-mono ${
+                          className={`text-xs sm:text-base font-medium font-mono ${
                             isIvory ? 'text-slate-600' : 'text-slate-300'
                           }`}
                         >
@@ -1059,7 +1229,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       <button
                         type="button"
                         onClick={() => handleToggleFlag(globalNum)}
-                        className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                           isFlagged
                             ? 'bg-amber-500 text-slate-950 font-semibold'
                             : isIvory
@@ -1073,7 +1243,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     </div>
 
                     {/* Stem */}
-                    <div className="text-lg sm:text-xl leading-relaxed font-medium">
+                    <div className="text-base sm:text-xl leading-relaxed font-medium break-words">
                       <MathText text={q.stem} />
                     </div>
 
@@ -1085,120 +1255,123 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       );
                       if (!resolvedImgUrl) return null;
                       return (
-                        <div className="my-2 p-3.5 rounded-xl bg-white border border-indigo-300/70 flex flex-col items-center justify-center shadow-xs">
+                        <div className="my-2 p-3 rounded-xl bg-white border border-indigo-300/70 flex flex-col items-center justify-center shadow-xs">
                           <img
                             src={resolvedImgUrl}
                             alt={`Hình minh họa Câu ${globalNum} (Phần II · Câu ${q.displayNumber})`}
-                            className="max-h-64 w-auto object-contain rounded-lg"
+                            className="max-h-64 max-w-full w-auto object-contain rounded-lg"
                           />
                         </div>
                       );
                     })()}
 
-                    {/* Structured Sub-Question Table with explicit [ĐÚNG] and [SAI] radio buttons */}
+                    {/* Responsive Sub-Question Statements (Full width on mobile phones, side-by-side on desktop) */}
                     <div
-                      className={`overflow-x-auto rounded-xl border ${
+                      className={`rounded-xl border overflow-hidden ${
                         isIvory ? 'border-slate-300' : 'border-slate-800'
                       }`}
                     >
-                      <table className="w-full text-left border-collapse text-base sm:text-lg">
-                        <thead>
-                          <tr
-                            className={`text-sm font-mono border-b ${
-                              isIvory
-                                ? 'bg-indigo-50/80 text-indigo-950 border-slate-300'
-                                : 'bg-slate-900 text-slate-200 border-slate-800'
-                            }`}
-                          >
-                            <th className="py-3 px-4 w-16">Mệnh đề</th>
-                            <th className="py-3 px-4">Nội dung nhận định</th>
-                            <th className="py-3 px-4 w-60 text-center">Lựa chọn Đúng / Sai</th>
-                          </tr>
-                        </thead>
-                        <tbody
-                          className={`divide-y ${
-                            isIvory ? 'divide-slate-200' : 'divide-slate-800'
-                          }`}
-                        >
-                          {q.statements.map((stmt) => {
-                            const currentVal = userSubMap[stmt.displayLabel];
-                            return (
-                              <tr
-                                key={stmt.displayLabel}
-                                className={
-                                  isIvory
-                                    ? 'bg-white hover:bg-slate-50/80'
-                                    : 'bg-slate-950/30 hover:bg-white/[0.02]'
-                                }
-                              >
-                                <td className="py-4 px-4 font-mono text-lg font-bold text-[#4338ca] dark:text-violet-400 align-top">
-                                  {stmt.displayLabel})
-                                </td>
-                                <td className="py-4 px-4 text-base sm:text-lg leading-relaxed align-top space-y-2">
-                                  <div>
-                                    <MathText text={stmt.text} />
+                      {/* Desktop Column Header */}
+                      <div
+                        className={`hidden md:grid md:grid-cols-[1fr_240px] items-center text-sm font-mono font-bold border-b px-4 py-3 ${
+                          isIvory
+                            ? 'bg-indigo-50/80 text-indigo-950 border-slate-300'
+                            : 'bg-slate-900 text-slate-200 border-slate-800'
+                        }`}
+                      >
+                        <div>Mệnh đề & Nội dung nhận định</div>
+                        <div className="text-center">Lựa chọn Đúng / Sai</div>
+                      </div>
+
+                      <div
+                        className={`divide-y ${
+                          isIvory ? 'divide-slate-200' : 'divide-slate-800'
+                        }`}
+                      >
+                        {q.statements.map((stmt) => {
+                          const currentVal = userSubMap[stmt.displayLabel];
+                          return (
+                            <div
+                              key={stmt.displayLabel}
+                              className={`p-3.5 sm:p-4 flex flex-col md:flex-row md:items-start md:justify-between gap-3.5 transition-colors ${
+                                isIvory
+                                  ? 'bg-white hover:bg-slate-50/80'
+                                  : 'bg-slate-950/30 hover:bg-white/[0.02]'
+                              }`}
+                            >
+                              {/* Full-width Statement Text on Mobile */}
+                              <div className="flex-1 min-w-0 w-full space-y-2">
+                                <div className="text-base sm:text-lg leading-relaxed break-words">
+                                  <span
+                                    className={`inline-block font-mono text-base sm:text-lg font-bold mr-2 ${
+                                      isIvory ? 'text-[#4338ca]' : 'text-violet-400'
+                                    }`}
+                                  >
+                                    {stmt.displayLabel})
+                                  </span>
+                                  <MathText text={stmt.text} />
+                                </div>
+
+                                {isSubmitted && (
+                                  <div className="text-xs sm:text-sm font-mono text-indigo-600 dark:text-indigo-300 pt-1 break-words">
+                                    Đáp án chuẩn: {stmt.isTrue ? 'ĐÚNG' : 'SAI'}
+                                    {stmt.explanation ? ' — ' : ''}
+                                    {stmt.explanation && <MathText text={stmt.explanation} />}
                                   </div>
-                                  {isSubmitted && (
-                                    <div className="text-sm font-mono text-indigo-600 dark:text-indigo-300">
-                                      Đáp án chuẩn: {stmt.isTrue ? 'ĐÚNG' : 'SAI'}
-                                      {stmt.explanation ? ' — ' : ''}
-                                      {stmt.explanation && <MathText text={stmt.explanation} />}
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="py-4 px-4 align-top">
-                                  <div className="flex items-center justify-center gap-2.5">
-                                    <button
-                                      type="button"
-                                      disabled={isSubmitted}
-                                      onClick={() =>
-                                        handleSelectPart2(q.id, stmt.displayLabel, true)
-                                      }
-                                      className={`flex items-center gap-2 px-3.5 py-2 rounded-lg font-mono text-sm font-bold border transition-all whitespace-nowrap shrink-0 ${
-                                        currentVal === true
-                                          ? 'bg-emerald-600 border-emerald-500 text-white shadow-sm'
-                                          : isIvory
-                                          ? 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-emerald-50'
-                                          : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-emerald-500/60'
-                                      }`}
-                                    >
-                                      <input
-                                        type="radio"
-                                        checked={currentVal === true}
-                                        readOnly
-                                        className="w-5 h-5 accent-emerald-500 pointer-events-none"
-                                      />
-                                      <span>[ĐÚNG]</span>
-                                    </button>
-                                    <button
-                                      type="button"
-                                      disabled={isSubmitted}
-                                      onClick={() =>
-                                        handleSelectPart2(q.id, stmt.displayLabel, false)
-                                      }
-                                      className={`flex items-center gap-2 px-3.5 py-2 rounded-lg font-mono text-sm font-bold border transition-all whitespace-nowrap shrink-0 ${
-                                        currentVal === false
-                                          ? 'bg-rose-600 border-rose-500 text-white shadow-sm'
-                                          : isIvory
-                                          ? 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-rose-50'
-                                          : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-rose-500/60'
-                                      }`}
-                                    >
-                                      <input
-                                        type="radio"
-                                        checked={currentVal === false}
-                                        readOnly
-                                        className="w-5 h-5 accent-rose-500 pointer-events-none"
-                                      />
-                                      <span>[SAI]</span>
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                                )}
+                              </div>
+
+                              {/* 2-Column True / False Action Buttons (50%/50% full width on mobile, fixed 240px on desktop) */}
+                              <div className="grid grid-cols-2 gap-2.5 w-full md:w-60 shrink-0 pt-1 md:pt-0">
+                                <button
+                                  type="button"
+                                  disabled={isSubmitted}
+                                  onClick={() =>
+                                    handleSelectPart2(q.id, stmt.displayLabel, true)
+                                  }
+                                  className={`w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg font-mono text-sm font-bold border transition-all ${
+                                    currentVal === true
+                                      ? 'bg-emerald-600 border-emerald-500 text-white shadow-sm'
+                                      : isIvory
+                                      ? 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-emerald-50'
+                                      : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-emerald-500/60'
+                                  }`}
+                                >
+                                  <input
+                                    type="radio"
+                                    checked={currentVal === true}
+                                    readOnly
+                                    className="w-4 h-4 sm:w-5 sm:h-5 accent-emerald-500 pointer-events-none shrink-0"
+                                  />
+                                  <span>[ĐÚNG]</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isSubmitted}
+                                  onClick={() =>
+                                    handleSelectPart2(q.id, stmt.displayLabel, false)
+                                  }
+                                  className={`w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg font-mono text-sm font-bold border transition-all ${
+                                    currentVal === false
+                                      ? 'bg-rose-600 border-rose-500 text-white shadow-sm'
+                                      : isIvory
+                                      ? 'bg-slate-100 border-slate-300 text-slate-800 hover:bg-rose-50'
+                                      : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-rose-500/60'
+                                  }`}
+                                >
+                                  <input
+                                    type="radio"
+                                    checked={currentVal === false}
+                                    readOnly
+                                    className="w-4 h-4 sm:w-5 sm:h-5 accent-rose-500 pointer-events-none shrink-0"
+                                  />
+                                  <span>[SAI]</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                 );
@@ -1207,17 +1380,17 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
           </section>
 
           {/* PART III SECTION */}
-          <section className="space-y-5">
-            <div className="px-6 py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
-              <h2 className="text-lg sm:text-xl font-bold text-white">
+          <section className="space-y-4 sm:space-y-5">
+            <div className="px-4 sm:px-6 py-4 sm:py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
+              <h2 className="text-base sm:text-xl font-bold text-white leading-snug">
                 PHẦN III. Câu trắc nghiệm trả lời ngắn (Từ câu {p1Count + p2Count + 1} đến câu {totalQuestionCount})
               </h2>
-              <p className="text-sm sm:text-base text-indigo-200">
+              <p className="text-xs sm:text-base text-indigo-200 leading-relaxed">
                 Thí sinh nhập kết quả là số (chấp nhận cả dấu phẩy <span className="font-mono">,</span> hoặc dấu chấm <span className="font-mono">.</span> thập phân). Mỗi câu đúng được <span className="font-mono font-bold text-emerald-300">0,25 điểm</span>.
               </p>
             </div>
 
-            <div className="space-y-5">
+            <div className="space-y-4 sm:space-y-5">
               {activeVariant.part3.map((q, idx) => {
                 const globalNum = p1Count + p2Count + idx + 1;
                 const val = answers.part3[q.id] || '';
@@ -1230,7 +1403,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`rounded-xl border-2 p-6 transition-colors space-y-5 ${
+                    className={`rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
@@ -1294,8 +1467,8 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     })()}
 
                     {/* Standardized Short Answer Input + On-Screen Numeric Keypad Toggle */}
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-4 pt-1">
-                      <div className="flex items-center gap-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 pt-1">
+                      <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
                         <label className="text-sm sm:text-base font-bold font-mono uppercase tracking-wider text-[#4338ca] dark:text-violet-300">
                           Đáp số của bạn:
                         </label>
@@ -1307,7 +1480,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                           onFocus={() => setActivePart3KeypadId(q.id)}
                           onChange={(e) => handleChangePart3(q.id, e.target.value)}
                           placeholder="Nhập số (VD: 1,5)"
-                          className={`w-52 py-3 px-4 rounded-xl font-mono text-xl font-semibold border-2 focus:outline-none tabular-nums ${
+                          className={`w-full sm:w-52 py-3 px-4 rounded-xl font-mono text-xl font-semibold border-2 focus:outline-none tabular-nums ${
                             isIvory
                               ? 'bg-white border-[#4338ca] text-slate-950'
                               : 'bg-slate-950 border-violet-500 text-white'
@@ -1477,6 +1650,12 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                 Đánh dấu: <strong className="text-amber-400">{flaggedCount}</strong>
               </span>
             </div>
+
+            <ProgressBar
+              completedCount={completedCount}
+              totalQuestionCount={totalQuestionCount}
+              compact
+            />
           </div>
 
           {/* 28-Question Navigation Matrix Grid */}
