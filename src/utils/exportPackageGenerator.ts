@@ -409,18 +409,24 @@ export function buildVariantsWordDocHtml(
         })
         .join('');
 
+      const govDisplay =
+        !meta.governingBody ||
+        /^SỞ\s+GIÁO\s+DỤC\s+VÀ\s+ĐÀO\s+TẠO\s+TP\s+ĐÀ\s+NẴNG$/i.test(meta.governingBody.trim())
+          ? 'SỞ GD & ĐT TP ĐÀ NẴNG'
+          : meta.governingBody.trim();
+
       return `
         <div class="WordSection${vIdx + 1}" style="${vIdx > 0 ? 'page-break-before:always;' : ''}">
           <table style="width:100%;border-collapse:collapse;border:none;margin-bottom:6pt;">
             <tr>
               <td style="width:44%;text-align:center;vertical-align:top;font-size:12pt;border:none;padding:0 4pt 0 0;">
-                <div>${meta.governingBody}</div>
+                <div>${govDisplay}</div>
                 <div style="font-weight:bold;text-decoration:underline;">${schoolDisplay}</div>
                 <div style="font-style:italic;font-size:11pt;margin-top:2pt;">(Đề thi gồm ${totalQ} câu)</div>
               </td>
               <td style="width:56%;text-align:center;vertical-align:top;font-size:12pt;border:none;padding:0 0 0 4pt;">
                 <div style="font-weight:bold;font-size:12pt;text-transform:uppercase;">${meta.examTerm}</div>
-                <div style="font-weight:bold;font-size:12pt;">Môn thi: ${meta.subjectName}</div>
+                <div style="font-weight:bold;font-size:12pt;">Môn: ${meta.subjectName}</div>
                 <div style="font-weight:bold;font-size:12pt;">${schoolYearDisplay}</div>
                 <div style="font-size:12pt;">Thời gian làm bài: ${meta.examDuration} phút (không kể thời gian phát đề)</div>
                 <table align="center" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:4pt auto 0 auto;width:auto;">
@@ -543,11 +549,16 @@ export function buildMasterAnswerKeyWordHtml(
   const p1Len = variants[0]?.part1.length || 0;
   const p2Len = variants[0]?.part2.length || 0;
   const p3Len = variants[0]?.part3.length || 0;
+  const govDisplay =
+    !meta.governingBody ||
+    /^SỞ\s+GIÁO\s+DỤC\s+VÀ\s+ĐÀO\s+TẠO\s+TP\s+ĐÀ\s+NẴNG$/i.test(meta.governingBody.trim())
+      ? 'SỞ GD & ĐT TP ĐÀ NẴNG'
+      : meta.governingBody.trim();
 
   const headerCols = variants
     .map(
       (v) =>
-        `<th style="border:1px solid #000;padding:6px;background:#ede9fe;text-align:center;">Mã đề ${v.code}</th>`
+        `<th style="border:1px solid #000;padding:6px;background:#ede9fe;text-align:center;font-family:'Times New Roman',Times,serif;">Mã đề ${v.code}</th>`
     )
     .join('');
 
@@ -555,12 +566,12 @@ export function buildMasterAnswerKeyWordHtml(
     const cells = variants
       .map((v) => {
         const sq = v.part1[qIdx];
-        return `<td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;">${
+        return `<td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;font-family:'Times New Roman',Times,serif;">${
           sq ? letters[sq.correctIndex] : '-'
         }</td>`;
       })
       .join('');
-    return `<tr><td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;">${
+    return `<tr><td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;font-family:'Times New Roman',Times,serif;">${
       meta.questionLabel || 'Câu'
     } ${qIdx + 1}</td>${cells}</tr>`;
   }).join('');
@@ -571,12 +582,12 @@ export function buildMasterAnswerKeyWordHtml(
       .map((v) => {
         const sq = v.part2[qIdx];
         const seq = sq
-          ? sq.statements.map((s) => `${s.displayLabel}:${s.isTrue ? 'Đ' : 'S'}`).join(' | ')
+          ? sq.statements.map((s) => (s.isTrue ? 'Đ' : 'S')).join('')
           : '-';
-        return `<td style="border:1px solid #000;padding:5px;text-align:center;font-family:monospace;">${seq}</td>`;
+        return `<td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;font-family:'Times New Roman',Times,serif;">${seq}</td>`;
       })
       .join('');
-    return `<tr><td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;">${
+    return `<tr><td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;font-family:'Times New Roman',Times,serif;">${
       meta.questionLabel || 'Câu'
     } ${displayNum}</td>${cells}</tr>`;
   }).join('');
@@ -586,12 +597,12 @@ export function buildMasterAnswerKeyWordHtml(
     const cells = variants
       .map((v) => {
         const sq = v.part3[qIdx];
-        return `<td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;">${
+        return `<td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;font-family:'Times New Roman',Times,serif;">${
           sq ? sq.answer : '-'
         }</td>`;
       })
       .join('');
-    return `<tr><td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;">${
+    return `<tr><td style="border:1px solid #000;padding:5px;text-align:center;font-weight:bold;font-family:'Times New Roman',Times,serif;">${
       meta.questionLabel || 'Câu'
     } ${displayNum}</td>${cells}</tr>`;
   }).join('');
@@ -602,13 +613,13 @@ export function buildMasterAnswerKeyWordHtml(
   <meta charset="utf-8" />
   <title>Bảng Đáp Án Tổng Hợp - ${meta.subjectName}</title>
   <style>
-    body { font-family: "Times New Roman", serif; font-size: 12pt; color: #000; }
+    body, table, th, td, h2, h3, div { font-family: "Times New Roman", Times, serif; font-size: 12pt; color: #000; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 16pt; }
   </style>
 </head>
 <body>
   <div style="text-align:center;margin-bottom:14pt;">
-    <div style="font-size:11pt;">${meta.governingBody} · TRƯỜNG ${meta.schoolName}</div>
+    <div style="font-size:11pt;">${govDisplay} · TRƯỜNG ${meta.schoolName}</div>
     <h2 style="margin:4pt 0;font-size:14pt;">BẢNG ĐÁP ÁN TỔNG HỢP CÁC MÃ ĐỀ (${variants
       .map((v) => v.code)
       .join(', ')})</h2>
@@ -617,19 +628,19 @@ export function buildMasterAnswerKeyWordHtml(
 
   <h3>PHẦN I. Trắc nghiệm nhiều lựa chọn (0,25 điểm / câu)</h3>
   <table>
-    <thead><tr><th style="border:1px solid #000;padding:6px;background:#ede9fe;">Câu</th>${headerCols}</tr></thead>
+    <thead><tr><th style="border:1px solid #000;padding:6px;background:#ede9fe;font-family:'Times New Roman',Times,serif;">Câu</th>${headerCols}</tr></thead>
     <tbody>${p1Rows}</tbody>
   </table>
 
   <h3>PHẦN II. Trắc nghiệm Đúng / Sai lũy tiến (Tối đa 1,00 điểm / câu)</h3>
   <table>
-    <thead><tr><th style="border:1px solid #000;padding:6px;background:#ede9fe;">Câu</th>${headerCols}</tr></thead>
+    <thead><tr><th style="border:1px solid #000;padding:6px;background:#ede9fe;font-family:'Times New Roman',Times,serif;">Câu</th>${headerCols}</tr></thead>
     <tbody>${p2Rows}</tbody>
   </table>
 
   <h3>PHẦN III. Trắc nghiệm trả lời ngắn (0,25 điểm / câu)</h3>
   <table>
-    <thead><tr><th style="border:1px solid #000;padding:6px;background:#ede9fe;">Câu</th>${headerCols}</tr></thead>
+    <thead><tr><th style="border:1px solid #000;padding:6px;background:#ede9fe;font-family:'Times New Roman',Times,serif;">Câu</th>${headerCols}</tr></thead>
     <tbody>${p3Rows}</tbody>
   </table>
 </body>
@@ -637,127 +648,248 @@ export function buildMasterAnswerKeyWordHtml(
 }
 
 /**
- * Build Machine Scoring Key File (.csv & .xls) compatible with TNMaker and QM phone scanning apps
- * Standardized columns: [Mã Đề, Câu, Đáp Án, Điểm, Định Dạng TNMaker/QM, Phần]
+ * Build standard 2D matrix rows for TNMaker-2025 grading template:
+ * - Row 1: ['Câu\\Mã Đề', code1, code2, ...]
+ * - Part I rows: ['1'..'N', 'A'/'B'/'C'/'D', ...]
+ * - Part II rows: ['1'..'M', 'SSĐS' (4-char Đ/S string), ...]
+ * - Part III rows: ['1'..'K', shortAnswer, ...]
  */
-export function buildTNMakerCsvContent(variants: ScrambledExamVariant[]): string {
+export function buildTNMakerMatrixRows(variants: ScrambledExamVariant[]): string[][] {
   const letters = ['A', 'B', 'C', 'D'];
-  const rows: string[] = [
-    'Mã Đề,Câu,Đáp Án,Điểm,Chuỗi Quét TNMaker/QM,Phần Thi,Câu Gốc',
-  ];
+  const p1Len = variants[0]?.part1.length || 0;
+  const p2Len = variants[0]?.part2.length || 0;
+  const p3Len = variants[0]?.part3.length || 0;
 
-  for (const v of variants) {
-    // Part I
-    v.part1.forEach((q, idx) => {
-      const keyLetter = letters[q.correctIndex] || 'A';
-      rows.push(
-        `${v.code},${idx + 1},${keyLetter},${q.points.toFixed(2)},${keyLetter},Phần I (ABCD),Gốc #${
-          q.originalQuestionNumber
-        }`
-      );
-    });
+  const matrix: string[][] = [];
 
-    // Part II: Exact True/False string sequence per question (e.g., "Đ-S-Đ-S" and "T-F-T-F")
-    v.part2.forEach((q, idx) => {
-      const vnSeq = q.statements.map((s) => (s.isTrue ? 'Đ' : 'S')).join('-');
-      const enSeq = q.statements.map((s) => (s.isTrue ? 'T' : 'F')).join('-');
-      rows.push(
-        `${v.code},II.${idx + 1},${vnSeq},${q.points.toFixed(2)},${enSeq},Phần II (Đúng/Sai),Gốc #${
-          q.originalQuestionNumber
-        }`
-      );
-    });
+  // Row 1: Header row
+  matrix.push(['Câu\\Mã Đề', ...variants.map((v) => String(v.code))]);
 
-    // Part III: Numeric answer values
-    v.part3.forEach((q, idx) => {
-      const cleanAns = String(q.answer).replace(/,/g, '.');
-      rows.push(
-        `${v.code},III.${idx + 1},"${q.answer}",${q.points.toFixed(
-          2
-        )},"${cleanAns}",Phần III (Trả lời ngắn),Gốc #${q.originalQuestionNumber}`
-      );
-    });
+  // Part I rows (1 .. p1Len)
+  for (let qIdx = 0; qIdx < p1Len; qIdx++) {
+    const row: string[] = [String(qIdx + 1)];
+    for (const v of variants) {
+      const sq = v.part1[qIdx];
+      row.push(sq ? letters[sq.correctIndex] || 'A' : '');
+    }
+    matrix.push(row);
   }
 
-  return '\ufeff' + rows.join('\r\n');
+  // Part II rows (1 .. p2Len, 4-char Đ/S sequence like SSĐS)
+  for (let qIdx = 0; qIdx < p2Len; qIdx++) {
+    const row: string[] = [String(qIdx + 1)];
+    for (const v of variants) {
+      const sq = v.part2[qIdx];
+      const seq = sq ? sq.statements.map((s) => (s.isTrue ? 'Đ' : 'S')).join('') : '';
+      row.push(seq);
+    }
+    matrix.push(row);
+  }
+
+  // Part III rows (1 .. p3Len, short answer string)
+  for (let qIdx = 0; qIdx < p3Len; qIdx++) {
+    const row: string[] = [String(qIdx + 1)];
+    for (const v of variants) {
+      const sq = v.part3[qIdx];
+      row.push(sq ? String(sq.answer) : '');
+    }
+    matrix.push(row);
+  }
+
+  return matrix;
+}
+
+/**
+ * Build Machine Scoring Key File (.csv, .xls, and .xlsx) matching (Mẫu) TNMaker-2025
+ */
+export function buildTNMakerCsvContent(variants: ScrambledExamVariant[]): string {
+  const matrix = buildTNMakerMatrixRows(variants);
+  const lines = matrix.map((row) =>
+    row
+      .map((cell) => {
+        const str = String(cell ?? '');
+        return /[",\r\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+      })
+      .join(',')
+  );
+  return '\ufeff' + lines.join('\r\n');
 }
 
 export function buildTNMakerExcelHtml(
   variants: ScrambledExamVariant[],
-  meta: ScramblerExportMetadata
+  _meta?: ScramblerExportMetadata
 ): string {
-  const letters = ['A', 'B', 'C', 'D'];
-  const bodyRows: string[] = [];
-
-  for (const v of variants) {
-    v.part1.forEach((q, idx) => {
-      const keyLetter = letters[q.correctIndex] || 'A';
-      bodyRows.push(`
-        <tr>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;mso-number-format:'\\@';">${v.code}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;">${idx + 1}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;font-weight:bold;color:#047857;">${keyLetter}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;">${q.points.toFixed(2)}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;">${keyLetter}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;">Phần I (ABCD)</td>
-        </tr>
-      `);
-    });
-
-    v.part2.forEach((q, idx) => {
-      const vnSeq = q.statements.map((s) => (s.isTrue ? 'Đ' : 'S')).join('-');
-      const enSeq = q.statements.map((s) => (s.isTrue ? 'T' : 'F')).join('-');
-      bodyRows.push(`
-        <tr>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;mso-number-format:'\\@';">${v.code}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;">II.${idx + 1}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;font-weight:bold;color:#4338ca;">${vnSeq}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;">${q.points.toFixed(2)}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;">${enSeq}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;">Phần II (Đúng/Sai lũy tiến)</td>
-        </tr>
-      `);
-    });
-
-    v.part3.forEach((q, idx) => {
-      bodyRows.push(`
-        <tr>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;mso-number-format:'\\@';">${v.code}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;">III.${idx + 1}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;font-weight:bold;color:#b45309;mso-number-format:'\\@';">${q.answer}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;">${q.points.toFixed(2)}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:center;mso-number-format:'\\@';">${String(
-            q.answer
-          ).replace(/,/g, '.')}</td>
-          <td style="border:1px solid #cbd5e1;padding:4px 8px;">Phần III (Trả lời ngắn)</td>
-        </tr>
-      `);
-    });
-  }
+  const matrix = buildTNMakerMatrixRows(variants);
+  const rowsHtml = matrix
+    .map((row) => {
+      const cellsHtml = row
+        .map(
+          (cell) =>
+            `<td style="mso-number-format:'\\@';text-align:left;vertical-align:bottom;">${String(
+              cell ?? ''
+            )
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')}</td>`
+        )
+        .join('');
+      return `<tr>${cellsHtml}</tr>`;
+    })
+    .join('\n      ');
 
   return `\ufeff<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
 <head>
   <meta charset="utf-8" />
-  <title>File Chấm Máy TNMaker & QM</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <x:ExcelWorkbook>
+      <x:ExcelWorksheets>
+        <x:ExcelWorksheet>
+          <x:Name>Sheet1</x:Name>
+          <x:WorksheetOptions>
+            <x:DisplayGridlines/>
+          </x:WorksheetOptions>
+        </x:ExcelWorksheet>
+        <x:ExcelWorksheet>
+          <x:Name>Sheet2</x:Name>
+          <x:WorksheetOptions>
+            <x:DisplayGridlines/>
+          </x:WorksheetOptions>
+        </x:ExcelWorksheet>
+      </x:ExcelWorksheets>
+    </x:ExcelWorkbook>
+  </xml>
+  <![endif]-->
+  <style>
+    body, table, td {
+      font-family: "Aptos Narrow", Calibri, Arial, sans-serif;
+      font-size: 11pt;
+    }
+    td {
+      mso-number-format: "\\@";
+    }
+  </style>
 </head>
 <body>
-  <table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:11pt;">
-    <thead>
-      <tr style="background:#4338ca;color:#ffffff;font-weight:bold;">
-        <th style="border:1px solid #cbd5e1;padding:6px 10px;">Mã Đề</th>
-        <th style="border:1px solid #cbd5e1;padding:6px 10px;">Câu</th>
-        <th style="border:1px solid #cbd5e1;padding:6px 10px;">Đáp Án</th>
-        <th style="border:1px solid #cbd5e1;padding:6px 10px;">Điểm</th>
-        <th style="border:1px solid #cbd5e1;padding:6px 10px;">Mã Quét TNMaker (T/F)</th>
-        <th style="border:1px solid #cbd5e1;padding:6px 10px;">Cấu Trúc Phần Thi</th>
-      </tr>
-    </thead>
+  <table>
     <tbody>
-      ${bodyRows.join('')}
+      ${rowsHtml}
     </tbody>
   </table>
 </body>
 </html>`;
+}
+
+function getExcelColumnLetter(colIndexZeroBased: number): string {
+  let n = colIndexZeroBased + 1;
+  let colName = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    colName = String.fromCharCode(65 + rem) + colName;
+    n = Math.floor((n - 1) / 26);
+  }
+  return colName;
+}
+
+/**
+ * Build native OpenXML SpreadsheetML (.xlsx) bytes matching (Mẫu) TNMaker-2025
+ */
+export function buildTNMakerXlsxBytes(variants: ScrambledExamVariant[]): Uint8Array {
+  const matrix = buildTNMakerMatrixRows(variants);
+
+  const escapeXml = (str: string) =>
+    str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+
+  const sheet1RowsXml = matrix
+    .map((row, rIdx) => {
+      const rowNum = rIdx + 1;
+      const cellsXml = row
+        .map((cellVal, cIdx) => {
+          const ref = `${getExcelColumnLetter(cIdx)}${rowNum}`;
+          return `<c r="${ref}" t="inlineStr"><is><t>${escapeXml(String(cellVal ?? ''))}</t></is></c>`;
+        })
+        .join('');
+      return `<row r="${rowNum}">${cellsXml}</row>`;
+    })
+    .join('');
+
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`;
+
+  const rootRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+
+  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+    <sheet name="Sheet2" sheetId="2" r:id="rId2"/>
+  </sheets>
+</workbook>`;
+
+  const workbookRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1">
+    <font>
+      <sz val="11"/>
+      <name val="Aptos Narrow"/>
+    </font>
+  </fonts>
+  <fills count="2">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+  </fills>
+  <borders count="1">
+    <border><left/><right/><top/><bottom/><diagonal/></border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="1">
+    <xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+</styleSheet>`;
+
+  const sheet1Xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>${sheet1RowsXml}</sheetData>
+</worksheet>`;
+
+  const sheet2Xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/>
+</worksheet>`;
+
+  return createZipArchiveUint8Array([
+    { path: '[Content_Types].xml', content: contentTypesXml },
+    { path: '_rels/.rels', content: rootRelsXml },
+    { path: 'xl/workbook.xml', content: workbookXml },
+    { path: 'xl/_rels/workbook.xml.rels', content: workbookRelsXml },
+    { path: 'xl/styles.xml', content: stylesXml },
+    { path: 'xl/worksheets/sheet1.xml', content: sheet1Xml },
+    { path: 'xl/worksheets/sheet2.xml', content: sheet2Xml },
+  ]);
 }
 
 /**
@@ -1427,6 +1559,12 @@ export function buildVariantsWordDocxBytes(
       ? rawYear.toUpperCase()
       : `NĂM HỌC: ${rawYear}`;
 
+    const govDisplay =
+      !meta.governingBody ||
+      /^SỞ\s+GIÁO\s+DỤC\s+VÀ\s+ĐÀO\s+TẠO\s+TP\s+ĐÀ\s+NẴNG$/i.test(meta.governingBody.trim())
+        ? 'SỞ GD & ĐT TP ĐÀ NẴNG'
+        : meta.governingBody.trim();
+
     // Top 2-column administrative header table
     const headerTableXml = `<w:tbl>
       <w:tblPr>
@@ -1449,7 +1587,7 @@ export function buildVariantsWordDocxBytes(
           <w:tcPr><w:tcW w:w="2200" w:type="pct"/></w:tcPr>
           <w:p>
             <w:pPr><w:spacing w:before="0" w:after="20"/><w:jc w:val="center"/></w:pPr>
-            ${buildOpenXmlRun(meta.governingBody)}
+            ${buildOpenXmlRun(govDisplay)}
           </w:p>
           <w:p>
             <w:pPr><w:spacing w:before="0" w:after="40"/><w:jc w:val="center"/></w:pPr>
@@ -1468,7 +1606,7 @@ export function buildVariantsWordDocxBytes(
           </w:p>
           <w:p>
             <w:pPr><w:spacing w:before="0" w:after="20"/><w:jc w:val="center"/></w:pPr>
-            ${buildOpenXmlRun(`Môn thi: ${meta.subjectName}`, { bold: true })}
+            ${buildOpenXmlRun(`Môn: ${meta.subjectName}`, { bold: true })}
           </w:p>
           <w:p>
             <w:pPr><w:spacing w:before="0" w:after="20"/><w:jc w:val="center"/></w:pPr>
@@ -1740,7 +1878,11 @@ export function downloadComprehensiveExamZipPackage(
     content: buildMasterAnswerKeyWordHtml(variants, meta),
   });
 
-  // 4. Machine Scoring Key File (.xls & .csv for TNMaker / QM)
+  // 4. Machine Scoring Key File (.xlsx, .xls & .csv for TNMaker / QM — chuẩn mẫu TNMaker-2025)
+  zipEntries.push({
+    path: `${folderName}/02_Bang_Dap_An_Va_Cham_May_TNMaker/Dap_An_TNMaker_${subjectSlug}.xlsx`,
+    content: buildTNMakerXlsxBytes(variants),
+  });
   zipEntries.push({
     path: `${folderName}/02_Bang_Dap_An_Va_Cham_May_TNMaker/File_Cham_May_TNMaker_QM_${subjectSlug}.xls`,
     content: buildTNMakerExcelHtml(variants, meta),

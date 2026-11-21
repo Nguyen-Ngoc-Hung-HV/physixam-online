@@ -115,10 +115,42 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const [reviewFilter, setReviewFilter] = useState<'ALL' | 'INCORRECT' | 'PART_I' | 'PART_II' | 'PART_III'>('ALL');
 
   const questionRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const questionsContainerRef = useRef<HTMLDivElement | null>(null);
+  const [headerOffsetPx, setHeaderOffsetPx] = useState<number>(56);
   const onCloudExamLoadedRef = useRef(onCloudExamLoaded);
   useEffect(() => {
     onCloudExamLoadedRef.current = onCloudExamLoaded;
   }, [onCloudExamLoaded]);
+
+  // Lock outer document scrolling during active exam so top bar & right column remain 100% stationary
+  // and ONLY the question/answer column scrolls up and down
+  useEffect(() => {
+    if (!isExamActive) {
+      document.body.classList.remove('exam-workspace-locked');
+      return;
+    }
+
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    document.body.classList.add('exam-workspace-locked');
+
+    const updateHeaderOffset = () => {
+      const topNav = document.querySelector('header');
+      if (topNav) {
+        const rect = topNav.getBoundingClientRect();
+        setHeaderOffsetPx(Math.max(48, Math.round(rect.height)));
+      }
+    };
+
+    updateHeaderOffset();
+    window.addEventListener('resize', updateHeaderOffset);
+    const resizeTimer = window.setTimeout(updateHeaderOffset, 120);
+
+    return () => {
+      document.body.classList.remove('exam-workspace-locked');
+      window.removeEventListener('resize', updateHeaderOffset);
+      window.clearTimeout(resizeTimer);
+    };
+  }, [isExamActive]);
 
   useEffect(() => {
     if (initialExamCode) {
@@ -211,15 +243,30 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
     if (!rawBaseVariant) return rawBaseVariant;
 
+    // Nếu mã bài thi trực tuyến có kèm examData đã đồng bộ Phần A (Đề) + Phần B (Đáp án & Lời giải chi tiết),
+    // ưu tiên đồng bộ dữ liệu gốc này trước khi giữ nguyên (practice) hoặc xáo trộn (exam)
+    const assignmentMatchesCode =
+      !cleanCode ||
+      !matchedOnlineAssignment?.examCode ||
+      matchedOnlineAssignment.examCode.trim().toUpperCase() === cleanCode.toUpperCase();
+
+    const hydratedBaseVariant =
+      assignmentMatchesCode && matchedOnlineAssignment?.examData
+        ? restoreUnshuffledVariant(
+            { ...rawBaseVariant, code: cleanCode || rawBaseVariant.code },
+            matchedOnlineAssignment.examData
+          )
+        : rawBaseVariant;
+
     // Chế độ ôn tập: giữ nguyên thứ tự các câu hỏi và đáp án gốc (không xáo trộn)
     if (matchedOnlineAssignment?.mode === 'practice') {
-      return restoreUnshuffledVariant(rawBaseVariant, matchedOnlineAssignment?.examData);
+      return restoreUnshuffledVariant(hydratedBaseVariant, matchedOnlineAssignment?.examData);
     }
 
     // Chế độ kiểm tra: tự động xáo trộn ngẫu nhiên thứ tự câu hỏi trong mỗi phần
     // và thứ tự đáp án trong mỗi câu (giữ nguyên thứ tự các phần I -> II -> III)
     const effectiveSeed = `${studentId.trim().toUpperCase() || 'GUEST'}-${studentName.trim().toUpperCase() || 'STUDENT'}-${cleanCode.toUpperCase()}-${studentShuffleSeed}`;
-    return shuffleVariantForStudent(rawBaseVariant, effectiveSeed);
+    return shuffleVariantForStudent(hydratedBaseVariant, effectiveSeed);
   }, [
     variants,
     selectedCode,
@@ -663,8 +710,28 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
   const scrollToQuestion = (globalNum: number) => {
     const el = questionRefs.current[globalNum];
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const container = questionsContainerRef.current;
+    if (el && container && container.scrollHeight > container.clientHeight + 4) {
+      const containerRect = container.getBoundingClientRect();
+      const elRect = el.getBoundingClientRect();
+      const targetScrollTop = container.scrollTop + (elRect.top - containerRect.top) - 8;
+      container.scrollTo({ top: Math.max(0, targetScrollTop), behavior: 'smooth' });
+    } else if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const handleForwardWheelToQuestions = (e: React.WheelEvent<HTMLElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollHeight > el.clientHeight + 2) {
+      const canScrollDown = e.deltaY > 0 && el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+      const canScrollUp = e.deltaY < 0 && el.scrollTop > 0;
+      if (canScrollDown || canScrollUp) {
+        return;
+      }
+    }
+    if (questionsContainerRef.current) {
+      questionsContainerRef.current.scrollBy({ top: e.deltaY, behavior: 'auto' });
     }
   };
 
@@ -888,119 +955,126 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const isIvory = paperTheme === 'ivory';
 
   return (
-    <div className="w-full max-w-[1440px] mx-auto px-2.5 sm:px-6 py-4 sm:py-6 select-none overflow-x-hidden">
-      {/* Top Kiosk Security Bar */}
-      <div className="mb-4 sm:mb-6 px-3 sm:px-4 py-3 rounded-xl bg-[#18182e] border border-indigo-900/80 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2.5 text-xs">
-          <span className="font-bold text-white flex items-center gap-1.5">
-            <UserCheck className="w-4 h-4 text-violet-400" />
-            <span>{studentName}</span>
-          </span>
-          <span aria-hidden="true" className="text-slate-600">·</span>
-          <span className="font-mono text-slate-300">SBD: {studentId}</span>
-          <span aria-hidden="true" className="text-slate-600">·</span>
-          <span className="font-mono font-bold text-violet-300">Mã đề {activeVariant.code}</span>
-          <span aria-hidden="true" className="text-slate-600">·</span>
-          <span className="font-mono text-emerald-400">
-            {lastSavedTime ? `Đã lưu tự động lúc ${lastSavedTime}` : 'Đang đồng bộ LocalStorage...'}
-          </span>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Paper Surface Contrast Switcher */}
-          <button
-            type="button"
-            onClick={() => setPaperTheme((t) => (t === 'ivory' ? 'dark' : 'ivory'))}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+    <div className="w-full select-none">
+      {/* Fixed Viewport Split Workspace on Desktop/Tablet (md+):
+          Top Header Bar & Right Status Column stay 100% fixed; ONLY Left Question List scrolls */}
+      <div
+        style={{ top: `${headerOffsetPx}px` }}
+        className="w-full md:fixed md:inset-x-0 md:bottom-0 md:z-30 bg-[#0b0f19] flex flex-col md:overflow-hidden"
+      >
+        <div className="w-full max-w-[1440px] mx-auto px-2.5 sm:px-5 pt-2 sm:pt-2.5 pb-2 sm:pb-3 flex-1 min-h-0 flex flex-col gap-2.5 sm:gap-3">
+          {/* Fixed Top Exam Bar (Student Info + Action Controls + Progress Bar) */}
+          <div
+            onWheel={handleForwardWheelToQuestions}
+            className="shrink-0 sticky top-[52px] md:static z-30 px-3 sm:px-4 py-2 rounded-xl bg-[#18182e]/95 backdrop-blur-md border-2 border-indigo-800/80 shadow-md space-y-1.5"
           >
-            {isIvory ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
-            <span>{isIvory ? 'Nền Giấy Tối' : 'Nền Giấy Trắng Ngà'}</span>
-          </button>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
+                <span className="font-extrabold text-white flex items-center gap-1.5">
+                  <UserCheck className="w-4 h-4 text-violet-400 shrink-0" />
+                  <span>{studentName}</span>
+                </span>
+                <span aria-hidden="true" className="text-slate-500">·</span>
+                <span className="font-mono font-bold text-slate-200">SBD: {studentId}</span>
+                <span aria-hidden="true" className="text-slate-500">·</span>
+                <span className="font-mono font-extrabold text-violet-300">Mã đề {activeVariant.code}</span>
+                <span aria-hidden="true" className="text-slate-500">·</span>
+                <span className="font-mono font-bold text-emerald-400">
+                  {lastSavedTime ? `Đã lưu tự động lúc ${lastSavedTime}` : 'Đang đồng bộ LocalStorage...'}
+                </span>
+              </div>
 
-          {/* Simulate Tab Switch button for easy evaluator verification */}
-          {!isSubmitted && (
-            <button
-              type="button"
-              onClick={() =>
-                recordViolation(
-                  'TAB_SWITCH',
-                  'Mô phỏng kiểm thử: Phát hiện hành vi chuyển Tab trình duyệt ra ngoài cửa sổ làm bài.',
-                  true
-                )
-              }
-              className="px-3 py-1.5 text-xs font-medium bg-amber-950/80 hover:bg-amber-900 text-amber-200 border border-amber-700/60 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                {/* Paper Surface Contrast Switcher */}
+                <button
+                  type="button"
+                  onClick={() => setPaperTheme((t) => (t === 'ivory' ? 'dark' : 'ivory'))}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                >
+                  {isIvory ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+                  <span>{isIvory ? 'Nền Giấy Tối' : 'Nền Giấy Trắng Ngà'}</span>
+                </button>
+
+                {/* Simulate Tab Switch button for easy evaluator verification */}
+                {!isSubmitted && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      recordViolation(
+                        'TAB_SWITCH',
+                        'Mô phỏng kiểm thử: Phát hiện hành vi chuyển Tab trình duyệt ra ngoài cửa sổ làm bài.',
+                        true
+                      )
+                    }
+                    className="px-2.5 py-1 text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white border border-amber-500 rounded-lg transition-colors whitespace-nowrap shrink-0 shadow-xs"
+                  >
+                    Thử Cảnh Báo Chuyển Tab
+                  </button>
+                )}
+
+                {!isFullscreenActive && !isSubmitted && (
+                  <button
+                    type="button"
+                    onClick={enterFullscreen}
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5" />
+                    <span>Bật Lại Toàn Màn Hình</span>
+                  </button>
+                )}
+
+                {isSubmitted && (
+                  <button
+                    type="button"
+                    onClick={() => setShowScorecardModal(true)}
+                    className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Award className="w-3.5 h-3.5" />
+                    <span>Xem Bảng Điểm Chi Tiết</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setIsExamActive(false)}
+                  className="px-2.5 py-1 text-xs font-bold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                >
+                  Đổi Thí Sinh / Mã Đề
+                </button>
+              </div>
+            </div>
+
+            {/* Integrated Compact Question Completion ProgressBar */}
+            <ProgressBar
+              completedCount={completedCount}
+              totalQuestionCount={totalQuestionCount}
+              flaggedCount={flaggedCount}
+              part1Completed={partCompletionStats.p1Done}
+              part1Total={p1Count}
+              part2Completed={partCompletionStats.p2Done}
+              part2Total={p2Count}
+              part3Completed={partCompletionStats.p3Done}
+              part3Total={activeVariant.part3.length}
+            />
+          </div>
+
+          {/* Main Split Grid: 70% Left Independent Scrollable Exam Questions / 30% Right Fixed Palette */}
+          <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-3.5 lg:gap-5 items-start md:items-stretch w-full max-w-full">
+            {/* ===================================================================
+                LEFT PANE (70% -> 8 of 12 columns): INDEPENDENTLY SCROLLABLE EXAM QUESTIONS & ANSWERS
+            =================================================================== */}
+            <div
+              ref={questionsContainerRef}
+              className="md:col-span-8 md:h-full md:overflow-y-auto md:pr-2 space-y-5 sm:space-y-6 pb-6 min-w-0 w-full max-w-full"
             >
-              Thử Cảnh Báo Chuyển Tab
-            </button>
-          )}
-
-          {!isFullscreenActive && !isSubmitted && (
-            <button
-              type="button"
-              onClick={enterFullscreen}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              <Maximize2 className="w-3.5 h-3.5" />
-              <span>Bật Lại Toàn Màn Hình</span>
-            </button>
-          )}
-
-          {isSubmitted && (
-            <button
-              type="button"
-              onClick={() => setShowScorecardModal(true)}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
-            >
-              <Award className="w-3.5 h-3.5" />
-              <span>Xem Bảng Điểm Chi Tiết</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setIsExamActive(false)}
-            className="px-3 py-1.5 text-xs font-medium bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
-          >
-            Đổi Thí Sinh / Mã Đề
-          </button>
-        </div>
-      </div>
-
-      {/* Visual Question Completion ProgressBar */}
-      <ProgressBar
-        completedCount={completedCount}
-        totalQuestionCount={totalQuestionCount}
-        flaggedCount={flaggedCount}
-        part1Completed={partCompletionStats.p1Done}
-        part1Total={p1Count}
-        part2Completed={partCompletionStats.p2Done}
-        part2Total={p2Count}
-        part3Completed={partCompletionStats.p3Done}
-        part3Total={activeVariant.part3.length}
-      />
-
-      {/* Security Toast Alert (for blocked right-click / copy / F12) */}
-      {securityToast && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-rose-950 border border-rose-500 text-rose-100 text-xs font-medium shadow-xl flex items-center gap-2">
-          <Lock className="w-4 h-4 text-rose-400 shrink-0" />
-          <span>{securityToast}</span>
-        </div>
-      )}
-
-      {/* Main Split Grid: 70% Left Exam Questions / 30% Right Sticky Palette */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6 items-start w-full max-w-full">
-        {/* ===================================================================
-            LEFT PANE (70% -> 8 of 12 columns): EXAM CONTENTS (PARTS I, II, III)
-        =================================================================== */}
-        <div className="lg:col-span-8 space-y-6 sm:space-y-8 min-w-0 w-full max-w-full">
           {/* PART I SECTION */}
           <section className="space-y-4 sm:space-y-5">
-            <div className="px-4 sm:px-6 py-4 sm:py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
-              <h2 className="text-base sm:text-xl font-bold text-white leading-snug">
+            <div className="px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
+              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug">
                 PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (Từ câu 1 đến câu {p1Count})
               </h2>
-              <p className="text-xs sm:text-base text-indigo-200 leading-relaxed">
-                Mỗi câu hỏi thí sinh chỉ chọn một phương án đúng nhất. Mỗi câu trả lời đúng được <span className="font-mono font-bold text-emerald-300">0,25 điểm</span>.
+              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed">
+                Mỗi câu hỏi thí sinh chỉ chọn một phương án đúng nhất. Mỗi câu trả lời đúng được <span className="font-mono font-extrabold text-emerald-400">0,25 điểm</span>.
               </p>
             </div>
 
@@ -1017,7 +1091,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
+                    className={`scroll-mt-36 rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
@@ -1169,12 +1243,12 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
           {/* PART II SECTION */}
           <section className="space-y-4 sm:space-y-5">
-            <div className="px-4 sm:px-6 py-4 sm:py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
-              <h2 className="text-base sm:text-xl font-bold text-white leading-snug">
+            <div className="px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
+              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug">
                 PHẦN II. Câu trắc nghiệm đúng sai (Từ câu {p1Count + 1} đến câu {p1Count + p2Count})
               </h2>
-              <p className="text-xs sm:text-base text-indigo-200 leading-relaxed">
-                Trong mỗi ý <span className="font-mono font-bold">a), b), c), d)</span> ở mỗi câu, thí sinh chọn <span className="font-bold text-emerald-300">[ĐÚNG]</span> hoặc <span className="font-bold text-amber-300">[SAI]</span>. Điểm từng câu: 1 ý đúng = 0,10đ · 2 ý đúng = 0,25đ · 3 ý đúng = 0,50đ · 4 ý đúng = 1,00đ.
+              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed">
+                Trong mỗi ý <span className="font-mono font-extrabold text-violet-300">a), b), c), d)</span> ở mỗi câu, thí sinh chọn <span className="font-extrabold text-emerald-400">[ĐÚNG]</span> hoặc <span className="font-extrabold text-rose-400">[SAI]</span>. Điểm từng câu: <span className="font-bold text-white">1 ý đúng = 0,10đ · 2 ý đúng = 0,25đ · 3 ý đúng = 0,50đ · 4 ý đúng = 1,00đ</span>.
               </p>
             </div>
 
@@ -1201,7 +1275,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
+                    className={`scroll-mt-36 rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
@@ -1313,10 +1387,29 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                                 </div>
 
                                 {isSubmitted && (
-                                  <div className="text-xs sm:text-sm font-mono text-indigo-600 dark:text-indigo-300 pt-1 break-words">
-                                    Đáp án chuẩn: {stmt.isTrue ? 'ĐÚNG' : 'SAI'}
-                                    {stmt.explanation ? ' — ' : ''}
-                                    {stmt.explanation && <MathText text={stmt.explanation} />}
+                                  <div className="mt-2 p-2.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-xs sm:text-sm space-y-1 break-words">
+                                    <div className="font-mono font-bold flex flex-wrap items-center gap-2">
+                                      <span className={stmt.isTrue ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                                        Đáp án chuẩn: {stmt.isTrue ? 'ĐÚNG' : 'SAI'}
+                                      </span>
+                                      {currentVal !== null && (
+                                        <span
+                                          className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                                            currentVal === stmt.isTrue
+                                              ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 border border-emerald-500/40'
+                                              : 'bg-rose-500/20 text-rose-600 dark:text-rose-300 border border-rose-500/40'
+                                          }`}
+                                        >
+                                          {currentVal === stmt.isTrue ? '✓ Trả lời đúng' : '✕ Trả lời sai'}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {stmt.explanation && (
+                                      <div className="text-slate-700 dark:text-slate-200 leading-relaxed pt-0.5">
+                                        <span className="font-semibold text-indigo-600 dark:text-indigo-300">Giải thích: </span>
+                                        <MathText text={stmt.explanation} />
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -1372,6 +1465,17 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                           );
                         })}
                       </div>
+
+                      {isSubmitted && q.explanation && (
+                        <div className="mt-2 p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-xs sm:text-sm space-y-1.5 whitespace-pre-line">
+                          <div className="font-mono font-bold text-indigo-600 dark:text-indigo-300">
+                            Tổng hợp đáp án &amp; lời giải chi tiết Câu {globalNum}:
+                          </div>
+                          <div className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                            <MathText text={q.explanation} />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -1381,12 +1485,12 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
           {/* PART III SECTION */}
           <section className="space-y-4 sm:space-y-5">
-            <div className="px-4 sm:px-6 py-4 sm:py-5 rounded-xl bg-[#1e1b4b] border border-indigo-700/70 space-y-1.5">
-              <h2 className="text-base sm:text-xl font-bold text-white leading-snug">
+            <div className="px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
+              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug">
                 PHẦN III. Câu trắc nghiệm trả lời ngắn (Từ câu {p1Count + p2Count + 1} đến câu {totalQuestionCount})
               </h2>
-              <p className="text-xs sm:text-base text-indigo-200 leading-relaxed">
-                Thí sinh nhập kết quả là số (chấp nhận cả dấu phẩy <span className="font-mono">,</span> hoặc dấu chấm <span className="font-mono">.</span> thập phân). Mỗi câu đúng được <span className="font-mono font-bold text-emerald-300">0,25 điểm</span>.
+              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed">
+                Thí sinh nhập kết quả là số (chấp nhận cả dấu phẩy <span className="font-mono font-bold">,</span> hoặc dấu chấm <span className="font-mono font-bold">.</span> thập phân). Mỗi câu đúng được <span className="font-mono font-extrabold text-emerald-400">0,25 điểm</span>.
               </p>
             </div>
 
@@ -1403,7 +1507,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
+                    className={`scroll-mt-36 rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
@@ -1613,208 +1717,214 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
           </section>
         </div>
 
-        {/* ===================================================================
-            RIGHT PANE (30% -> 4 of 12 columns): STICKY NAVIGATION PALETTE
-        =================================================================== */}
-        <aside className="lg:col-span-4 lg:sticky lg:top-20 space-y-5">
-          {/* High-visibility Countdown Timer Card */}
-          <div
-            className={`rounded-2xl border-2 p-5 space-y-3 transition-colors ${
-              isLowTime
-                ? 'bg-rose-950/90 border-rose-500 text-rose-100 animate-pulse'
-                : 'bg-[#18182e] border-indigo-800/80 text-white'
-            }`}
-          >
-            <div className="flex items-center justify-between text-xs sm:text-sm">
-              <span className="font-semibold flex items-center gap-1.5 text-slate-200">
-                <Clock className="w-4 h-4 text-violet-400" />
-                <span>THỜI GIAN LÀM BÀI CÒN LẠI</span>
-              </span>
-              <span className="font-mono text-sm font-bold text-violet-300">
-                Mã đề {activeVariant.code}
-              </span>
-            </div>
-
-            <div className="text-3xl sm:text-4xl font-bold font-mono tabular-nums tracking-wider text-center py-3 bg-slate-950/70 rounded-xl border border-slate-800">
-              {formatCountdown(remainingSeconds)}
-            </div>
-
-            <div className="flex items-center justify-between text-sm font-mono tabular-nums text-slate-200 pt-1">
-              <span>
-                Đã trả lời:{' '}
-                <strong className="text-emerald-400">
-                  {completedCount}/{totalQuestionCount}
-                </strong>
-              </span>
-              <span>
-                Đánh dấu: <strong className="text-amber-400">{flaggedCount}</strong>
-              </span>
-            </div>
-
-            <ProgressBar
-              completedCount={completedCount}
-              totalQuestionCount={totalQuestionCount}
-              compact
-            />
-          </div>
-
-          {/* 28-Question Navigation Matrix Grid */}
-          <div className="bg-[#18182e] border border-indigo-900/80 rounded-2xl p-5 space-y-4">
-            <div className="space-y-1">
-              <h3 className="text-base sm:text-lg font-bold text-white">
-                Bảng Điều Hướng {totalQuestionCount} Câu Hỏi
-              </h3>
-              <p className="text-xs sm:text-sm text-slate-400">
-                Nhấn vào số thứ tự câu bất kỳ để cuộn mượt tới câu hỏi đó.
-              </p>
-            </div>
-
-            {/* Legend */}
-            <div className="grid grid-cols-3 gap-2 text-xs text-slate-300 font-mono">
-              <div className="flex items-center gap-1.5">
-                <span className="w-3.5 h-3.5 rounded bg-violet-600 inline-block shrink-0" />
-                <span>Đã làm</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3.5 h-3.5 rounded border border-slate-600 bg-slate-900 inline-block shrink-0" />
-                <span>Chưa làm</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-3.5 h-3.5 rounded border-2 border-amber-400 bg-amber-500/20 inline-block shrink-0" />
-                <span>Xem lại</span>
-              </div>
-            </div>
-
-            {/* Part I Grid */}
-            <div className="space-y-2">
-              <div className="text-xs font-mono text-slate-300">
-                Phần I: Nhiều lựa chọn (Câu 1–{p1Count})
-              </div>
-              <div className="grid grid-cols-6 gap-2">
-                {activeVariant.part1.map((q, idx) => {
-                  const num = idx + 1;
-                  const done = isQuestionFullyCompleted(activeVariant, answers, num);
-                  const flagged = Boolean(answers.flagged[num]);
-                  return (
-                    <button
-                      key={q.id}
-                      type="button"
-                      onClick={() => scrollToQuestion(num)}
-                      className={`w-11 h-11 sm:w-12 sm:h-12 mx-auto rounded-lg font-mono text-base font-bold tabular-nums transition-all border flex items-center justify-center ${
-                        done
-                          ? 'bg-violet-600 border-violet-400 text-white'
-                          : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-500'
-                      } ${flagged ? 'ring-2 ring-amber-400 border-amber-400' : ''}`}
-                    >
-                      {num}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Part II Grid */}
-            <div className="space-y-2">
-              <div className="text-xs font-mono text-slate-300">
-                Phần II: Đúng / Sai (Câu {p1Count + 1}–{p1Count + p2Count})
-              </div>
-              <div className="grid grid-cols-4 gap-2">
-                {activeVariant.part2.map((q, idx) => {
-                  const num = p1Count + idx + 1;
-                  const done = isQuestionFullyCompleted(activeVariant, answers, num);
-                  const partial = isQuestionPartiallyCompleted(activeVariant, answers, num);
-                  const flagged = Boolean(answers.flagged[num]);
-                  return (
-                    <button
-                      key={q.id}
-                      type="button"
-                      onClick={() => scrollToQuestion(num)}
-                      className={`h-11 sm:h-12 rounded-lg font-mono text-base font-bold tabular-nums transition-all border flex items-center justify-center ${
-                        done
-                          ? 'bg-violet-600 border-violet-400 text-white'
-                          : partial
-                          ? 'bg-indigo-950 border-indigo-400 text-indigo-200'
-                          : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-500'
-                      } ${flagged ? 'ring-2 ring-amber-400 border-amber-400' : ''}`}
-                    >
-                      {num}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Part III Grid */}
-            <div className="space-y-2">
-              <div className="text-xs font-mono text-slate-300">
-                Phần III: Trả lời ngắn (Câu {p1Count + p2Count + 1}–{totalQuestionCount})
-              </div>
-              <div className="grid grid-cols-6 gap-2">
-                {activeVariant.part3.map((q, idx) => {
-                  const num = p1Count + p2Count + idx + 1;
-                  const done = isQuestionFullyCompleted(activeVariant, answers, num);
-                  const flagged = Boolean(answers.flagged[num]);
-                  return (
-                    <button
-                      key={q.id}
-                      type="button"
-                      onClick={() => scrollToQuestion(num)}
-                      className={`w-11 h-11 sm:w-12 sm:h-12 mx-auto rounded-lg font-mono text-base font-bold tabular-nums transition-all border flex items-center justify-center ${
-                        done
-                          ? 'bg-violet-600 border-violet-400 text-white'
-                          : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-500'
-                      } ${flagged ? 'ring-2 ring-amber-400 border-amber-400' : ''}`}
-                    >
-                      {num}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Anti-Cheat Status Summary inside Sticky Card */}
-            <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-1.5 text-xs sm:text-sm font-mono">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">Giám sát Kiosk:</span>
-                <span className="text-emerald-400 font-semibold">ĐANG BẢO VỆ</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">Số lần vi phạm (Tab/Blur):</span>
-                <span
-                  className={
-                    violations.length > 0
-                      ? 'text-rose-400 font-bold'
-                      : 'text-slate-300'
-                  }
-                >
-                  {violations.length} lần
-                </span>
-              </div>
-            </div>
-
-            {/* Primary Submit Exam CTA */}
-            {!isSubmitted ? (
-              <button
-                type="button"
-                onClick={() => setShowSubmitConfirm(true)}
-                className="w-full py-3.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-base flex items-center justify-center gap-2 shadow-lg transition-colors whitespace-nowrap shrink-0"
+            {/* ===================================================================
+                RIGHT PANE (30% -> 4 of 12 columns): FIXED STATIONARY STATUS & NAVIGATION PALETTE
+            =================================================================== */}
+            <aside
+              onWheel={handleForwardWheelToQuestions}
+              className="md:col-span-4 md:h-full md:overflow-y-auto flex flex-col gap-2.5"
+            >
+              {/* Compact High-visibility Countdown Timer Card */}
+              <div
+                className={`shrink-0 rounded-xl border-2 p-2.5 sm:p-3 space-y-1.5 transition-colors shadow-md ${
+                  isLowTime
+                    ? 'bg-rose-950/90 border-rose-500 text-rose-100 animate-pulse'
+                    : 'bg-[#18182e] border-indigo-800/80 text-white'
+                }`}
               >
-                <Send className="w-5 h-5" />
-                <span>Nộp Bài Thi (Submit Exam)</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowScorecardModal(true)}
-                className="w-full py-3.5 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold text-base flex items-center justify-center gap-2 shadow-lg transition-colors whitespace-nowrap shrink-0"
-              >
-                <Award className="w-5 h-5" />
-                <span>Mở Phiếu Điểm Chuẩn Bộ GD&ĐT</span>
-              </button>
-            )}
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span className="font-extrabold flex items-center gap-1.5 text-slate-200">
+                    <Clock className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                    <span>THỜI GIAN CÒN LẠI</span>
+                  </span>
+                  <span className="font-mono text-xs sm:text-sm font-extrabold text-violet-300">
+                    Mã đề {activeVariant.code}
+                  </span>
+                </div>
+
+                <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums tracking-wider text-center py-1 bg-slate-950/70 rounded-lg border border-slate-800">
+                  {formatCountdown(remainingSeconds)}
+                </div>
+
+                <div className="flex items-center justify-between text-xs font-mono font-bold tabular-nums text-slate-200">
+                  <span>
+                    Đã trả lời:{' '}
+                    <strong className="text-emerald-400">
+                      {completedCount}/{totalQuestionCount}
+                    </strong>
+                  </span>
+                  <span>
+                    Đánh dấu: <strong className="text-amber-400">{flaggedCount}</strong>
+                  </span>
+                </div>
+
+                <ProgressBar
+                  completedCount={completedCount}
+                  totalQuestionCount={totalQuestionCount}
+                  compact
+                />
+              </div>
+
+              {/* Compact Question Status & Navigation Matrix Grid */}
+              <div className="shrink-0 bg-[#18182e] border-2 border-indigo-900/80 rounded-xl p-2.5 sm:p-3 space-y-2 shadow-md">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-slate-800/80 pb-1.5">
+                  <h3 className="text-xs sm:text-sm font-extrabold text-white">
+                    Bảng Điều Hướng {totalQuestionCount} Câu Hỏi
+                  </h3>
+                  {/* Compact Inline Legend */}
+                  <div className="flex items-center gap-2 text-[11px] text-slate-200 font-mono font-bold">
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-xs bg-violet-600 inline-block shrink-0" />
+                      <span>Đã làm</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-xs border border-slate-500 bg-slate-900 inline-block shrink-0" />
+                      <span>Chưa làm</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-xs border-2 border-amber-400 bg-amber-500/20 inline-block shrink-0" />
+                      <span>Xem lại</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Part I Grid */}
+                <div className="space-y-1">
+                  <div className="text-[11px] sm:text-xs font-mono font-bold text-slate-200">
+                    Phần I: Nhiều lựa chọn (Câu 1–{p1Count})
+                  </div>
+                  <div className="grid grid-cols-6 gap-1.5">
+                    {activeVariant.part1.map((q, idx) => {
+                      const num = idx + 1;
+                      const done = isQuestionFullyCompleted(activeVariant, answers, num);
+                      const flagged = Boolean(answers.flagged[num]);
+                      return (
+                        <button
+                          key={q.id}
+                          type="button"
+                          onClick={() => scrollToQuestion(num)}
+                          className={`w-full h-7 sm:h-8 rounded-lg font-mono text-xs font-extrabold tabular-nums transition-all border flex items-center justify-center ${
+                            done
+                              ? 'bg-violet-600 border-violet-400 text-white'
+                              : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-500'
+                          } ${flagged ? 'ring-2 ring-amber-400 border-amber-400' : ''}`}
+                        >
+                          {num}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Part II Grid */}
+                <div className="space-y-1">
+                  <div className="text-[11px] sm:text-xs font-mono font-bold text-slate-200">
+                    Phần II: Đúng / Sai (Câu {p1Count + 1}–{p1Count + p2Count})
+                  </div>
+                  <div className="grid grid-cols-6 gap-1.5">
+                    {activeVariant.part2.map((q, idx) => {
+                      const num = p1Count + idx + 1;
+                      const done = isQuestionFullyCompleted(activeVariant, answers, num);
+                      const partial = isQuestionPartiallyCompleted(activeVariant, answers, num);
+                      const flagged = Boolean(answers.flagged[num]);
+                      return (
+                        <button
+                          key={q.id}
+                          type="button"
+                          onClick={() => scrollToQuestion(num)}
+                          className={`w-full h-7 sm:h-8 rounded-lg font-mono text-xs font-extrabold tabular-nums transition-all border flex items-center justify-center ${
+                            done
+                              ? 'bg-violet-600 border-violet-400 text-white'
+                              : partial
+                              ? 'bg-indigo-950 border-indigo-400 text-indigo-200'
+                              : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-500'
+                          } ${flagged ? 'ring-2 ring-amber-400 border-amber-400' : ''}`}
+                        >
+                          {num}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Part III Grid */}
+                <div className="space-y-1">
+                  <div className="text-[11px] sm:text-xs font-mono font-bold text-slate-200">
+                    Phần III: Trả lời ngắn (Câu {p1Count + p2Count + 1}–{totalQuestionCount})
+                  </div>
+                  <div className="grid grid-cols-6 gap-1.5">
+                    {activeVariant.part3.map((q, idx) => {
+                      const num = p1Count + p2Count + idx + 1;
+                      const done = isQuestionFullyCompleted(activeVariant, answers, num);
+                      const flagged = Boolean(answers.flagged[num]);
+                      return (
+                        <button
+                          key={q.id}
+                          type="button"
+                          onClick={() => scrollToQuestion(num)}
+                          className={`w-full h-7 sm:h-8 rounded-lg font-mono text-xs font-extrabold tabular-nums transition-all border flex items-center justify-center ${
+                            done
+                              ? 'bg-violet-600 border-violet-400 text-white'
+                              : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-slate-500'
+                          } ${flagged ? 'ring-2 ring-amber-400 border-amber-400' : ''}`}
+                        >
+                          {num}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Compact Single-Line Anti-Cheat Status Summary */}
+                <div className="px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-2 text-xs font-mono font-bold">
+                  <span className="text-slate-300">
+                    Giám sát: <strong className="text-emerald-400">ĐANG BẢO VỆ</strong>
+                  </span>
+                  <span className="text-slate-300">
+                    Vi phạm:{' '}
+                    <strong
+                      className={
+                        violations.length > 0 ? 'text-rose-400' : 'text-slate-200'
+                      }
+                    >
+                      {violations.length} lần
+                    </strong>
+                  </span>
+                </div>
+
+                {/* Primary Submit Exam CTA */}
+                {!isSubmitted ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowSubmitConfirm(true)}
+                    className="w-full py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-md transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>Nộp Bài Thi (Submit Exam)</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShowScorecardModal(true)}
+                    className="w-full py-2 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-md transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Award className="w-4 h-4" />
+                    <span>Mở Phiếu Điểm Chuẩn Bộ GD&ĐT</span>
+                  </button>
+                )}
+              </div>
+            </aside>
           </div>
-        </aside>
+        </div>
       </div>
+
+      {/* Security Toast Alert (for blocked right-click / copy / F12) */}
+      {securityToast && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-rose-950 border border-rose-500 text-rose-100 text-xs font-medium shadow-xl flex items-center gap-2">
+          <Lock className="w-4 h-4 text-rose-400 shrink-0" />
+          <span>{securityToast}</span>
+        </div>
+      )}
 
       {/* =====================================================================
           MODAL 1: ANTI-CHEATING VIOLATION WARNING MODAL
@@ -2123,7 +2233,47 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       </div>
                     )}
 
-                    <div className="text-xs text-slate-400 border-t border-slate-800/80 pt-2 leading-relaxed">
+                    {item.subDetails && item.subDetails.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        {item.subDetails.map((sub) => {
+                          const isSubRight = sub.userChoice === sub.correctChoice;
+                          return (
+                            <div
+                              key={sub.label}
+                              className={`p-2.5 rounded-lg border text-xs leading-relaxed ${
+                                isSubRight
+                                  ? 'bg-emerald-950/20 border-emerald-500/30 text-slate-200'
+                                  : 'bg-rose-950/20 border-rose-500/30 text-slate-200'
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2 font-mono">
+                                <span className="font-bold text-indigo-300">
+                                  Ý {sub.label}) <span className="font-sans font-normal text-slate-200"><MathText text={sub.text} /></span>
+                                </span>
+                                <span className="shrink-0">
+                                  Chọn:{' '}
+                                  <strong className={isSubRight ? 'text-emerald-400' : 'text-rose-400'}>
+                                    {sub.userChoice === null ? 'Trống' : sub.userChoice ? 'ĐÚNG' : 'SAI'}
+                                  </strong>{' '}
+                                  | Chuẩn:{' '}
+                                  <strong className="text-emerald-400">
+                                    {sub.correctChoice ? 'ĐÚNG' : 'SAI'}
+                                  </strong>
+                                </span>
+                              </div>
+                              {sub.explanation && (
+                                <div className="mt-1 pt-1 border-t border-slate-800/80 text-slate-300">
+                                  <span className="font-semibold text-indigo-300">Giải thích: </span>
+                                  <MathText text={sub.explanation} />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    <div className="text-xs text-slate-300 border-t border-slate-800/80 pt-2 leading-relaxed whitespace-pre-line">
                       <span className="font-semibold text-indigo-300">Lời giải chi tiết: </span>
                       <MathText text={item.explanation} />
                     </div>

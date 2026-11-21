@@ -158,6 +158,7 @@ export interface QuestionGradeDetail {
     userChoice?: boolean;
     correctChoice: boolean;
     isCorrect: boolean;
+    explanation?: string;
   }[];
   explanation: string;
   questionText: string;

@@ -12,7 +12,7 @@
   body,
   #root {
     max-width: 100vw;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   body {
@@ -26,6 +26,15 @@
   body.theme-light {
     background-color: #f8fafc;
     color: #0f172a;
+  }
+}
+
+@media (min-width: 768px) {
+  body.exam-workspace-locked {
+    overflow: hidden !important;
+  }
+  body.exam-workspace-locked footer {
+    display: none !important;
   }
 }
 
@@ -138,6 +147,7 @@ body.font-size-large .katex {
 
 /* Primary Cards & Surface Containers in Light Theme */
 .theme-light .bg-\[\#18182e\],
+.theme-light .bg-\[\#18182e\]\/95,
 .theme-light .bg-\[\#18182e\]\/90,
 .theme-light .bg-\[\#141728\],
 .theme-light .bg-slate-900\/90,
@@ -184,6 +194,7 @@ body.font-size-large .katex {
 }
 
 /* Tinted Violet / Indigo / Emerald / Amber / Rose Surfaces in Light Theme */
+.theme-light .bg-\[\#1e1b4b\],
 .theme-light .bg-indigo-950,
 .theme-light .bg-indigo-950\/90,
 .theme-light .bg-indigo-950\/80,
@@ -194,7 +205,7 @@ body.font-size-large .katex {
 .theme-light .bg-violet-950\/90 {
   background-color: #ede9fe !important;
   border-color: #8b5cf6 !important;
-  color: #2e1065 !important;
+  color: #1e1b4b !important;
 }
 
 .theme-light .bg-emerald-950,
@@ -208,11 +219,15 @@ body.font-size-large .katex {
   color: #065f46 !important;
 }
 
+.theme-light .bg-amber-950,
+.theme-light .bg-amber-950\/90,
+.theme-light .bg-amber-950\/80,
+.theme-light .bg-amber-950\/70,
 .theme-light .bg-amber-950\/60,
 .theme-light .bg-amber-950\/50,
 .theme-light .bg-amber-950\/40 {
   background-color: #fffbeb !important;
-  border-color: #fbbf24 !important;
+  border-color: #f59e0b !important;
   color: #92400e !important;
 }
 

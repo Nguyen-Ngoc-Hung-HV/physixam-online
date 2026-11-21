@@ -650,16 +650,16 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen w-full max-w-full overflow-x-hidden flex flex-col transition-colors duration-200 ${
+      className={`min-h-screen w-full max-w-full overflow-x-clip flex flex-col transition-colors duration-200 ${
         theme === 'light'
           ? 'theme-light bg-slate-50 text-slate-900'
           : 'bg-[#0b0f19] text-slate-100'
       }`}
     >
-      {/* Persistent Top Navigation Bar */}
-      <header className="sticky top-0 z-40 w-full max-w-full overflow-x-hidden flex items-center justify-between gap-1.5 sm:gap-3 px-2 sm:px-5 py-2 sm:py-2.5 bg-[#0b0f19]/95 backdrop-blur border-b border-indigo-950/90 no-print">
+      {/* Persistent Top Navigation Bar — Enforced Fixed Positioning During Scroll */}
+      <header className="fixed top-0 left-0 right-0 z-40 w-full max-w-[100vw] overflow-hidden flex flex-nowrap items-center justify-between gap-1.5 sm:gap-3 px-2 sm:px-5 py-2 sm:py-2.5 bg-[#0b0f19]/95 backdrop-blur border-b border-indigo-950/90 no-print">
         {/* Zone 1: Prominent Exam/Assessment Emblem Icon & Theme Switcher */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 min-w-0">
+        <div className="flex flex-nowrap flex-shrink-0 items-center gap-1.5 sm:gap-2 shrink-0 min-w-0 max-w-full overflow-hidden">
           <a
             href="#top"
             onClick={(e) => {
@@ -671,54 +671,14 @@ export default function App() {
             aria-label="Trang chủ Hệ thống Khảo thí & Kiểm tra"
             className="group relative flex items-center gap-2 p-0.5 sm:p-1 rounded-xl transition-transform hover:scale-105 focus:outline-none shrink-0"
           >
-            {/* Standout Exam & Assessment Crest Emblem (SVG) */}
-            <div className="relative flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-violet-600 via-indigo-600 to-blue-600 p-0.5 shadow-md shadow-violet-600/30 ring-1 ring-white/25 group-hover:ring-violet-300 transition-all">
-              <div className="w-full h-full rounded-[10px] bg-slate-950/25 flex items-center justify-center">
-                <svg
-                  viewBox="0 0 40 40"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="w-6 h-6 sm:w-7 sm:h-7"
-                >
-                  {/* Exam Clipboard / Test Sheet */}
-                  <rect
-                    x="8"
-                    y="9"
-                    width="20"
-                    height="25"
-                    rx="3.5"
-                    fill="#FFFFFF"
-                    fillOpacity="0.95"
-                  />
-                  {/* Top Clip */}
-                  <rect
-                    x="13.5"
-                    y="6.5"
-                    width="9"
-                    height="4.5"
-                    rx="2"
-                    fill="#FBBF24"
-                  />
-                  {/* Question Lines */}
-                  <rect x="12" y="15" width="7" height="2" rx="1" fill="#4338CA" />
-                  <rect x="12" y="20" width="12" height="2" rx="1" fill="#6366F1" />
-                  <rect x="12" y="25" width="9" height="2" rx="1" fill="#6366F1" />
-                  {/* Gold Checkmark Badge (Exam Passed / Verified) */}
-                  <circle cx="27.5" cy="27.5" r="7.5" fill="#10B981" stroke="#FFFFFF" strokeWidth="1.8" />
-                  <path
-                    d="M24.3 27.6L26.5 29.8L31 25.3"
-                    stroke="#FFFFFF"
-                    strokeWidth="2.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  {/* Sparkle Star */}
-                  <path
-                    d="M31 7L32.1 9.9L35 11L32.1 12.1L31 15L29.9 12.1L27 11L29.9 9.9L31 7Z"
-                    fill="#FDE047"
-                  />
-                </svg>
-              </div>
+            {/* Unified Zoomed SmartTest Logo Icon */}
+            <div className="relative flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden bg-[#081226] shadow-md shadow-violet-600/30 ring-1 ring-white/25 group-hover:ring-violet-300 transition-all">
+              <img
+                src="/logo.png"
+                alt="SmartTest Logo"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover scale-105"
+              />
             </div>
           </a>
 
@@ -788,8 +748,8 @@ export default function App() {
           </button>
         </div>
 
-        {/* Zone 2: Quick Navigation Links (Bold Typography + Quick Scrambler Button) */}
-        <nav className="hidden md:flex items-center gap-3.5 lg:gap-5 text-sm font-bold text-slate-100">
+        {/* Zone 2: Quick Navigation Links (Strictly Width-Constrained & Overflow-Protected) */}
+        <nav className="hidden md:flex flex-nowrap flex-shrink-0 items-center justify-center gap-2 lg:gap-3.5 xl:gap-5 overflow-hidden text-sm font-bold text-slate-100 px-1">
           <button
             type="button"
             onClick={() => {
@@ -863,8 +823,8 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Zone 3: Role Switcher Action Buttons */}
-        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        {/* Zone 3: Role Switcher Action Buttons (Strictly Width-Constrained & Overflow-Protected) */}
+        <div className="flex flex-nowrap flex-shrink-0 items-center justify-end gap-1.5 sm:gap-2 shrink-0 min-w-0 max-w-full overflow-hidden">
           {currentView === 'teacher' && (
             <button
               type="button"
@@ -924,7 +884,7 @@ export default function App() {
       />
 
       {/* Main Content Area — Preserving state across 'home' | 'scrambler' | 'teacher' | 'student' | 'statistics' */}
-      <main className="flex-1 w-full max-w-full overflow-x-hidden">
+      <main className="flex-1 w-full max-w-full overflow-x-clip pt-[53px] sm:pt-[58px]">
         {currentView === 'home' && (
           <LandingPage
             examData={examData}
@@ -989,6 +949,12 @@ export default function App() {
       <footer className="border-t border-slate-900 bg-[#080b12] px-6 py-5 text-xs text-slate-400 no-print">
         <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-2">
+            <img
+              src="/logo.png"
+              alt="SmartTest Logo"
+              referrerPolicy="no-referrer"
+              className="w-5 h-5 rounded-md object-cover shrink-0 ring-1 ring-white/20"
+            />
             <span className="font-bold text-slate-200">SmartTest Physics GDPT 2018</span>
             <span aria-hidden="true">·</span>
             <span className="font-mono text-violet-400">Phiên bản v2.6 GDPT 2018</span>

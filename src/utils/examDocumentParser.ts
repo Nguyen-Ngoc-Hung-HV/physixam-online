@@ -2112,11 +2112,15 @@ function resolveQuestionImage(
     }
   }
 
-  // Strip @@IMAGE_TOKEN:...@@ and standalone figure caption lines ("Hình 1. Đồ thị...", "Hình 2. Đồ thị...", "Hình 3. Đồ thị...")
+  // Strip @@IMAGE_TOKEN:...@@ and standalone figure caption lines ("Hình 1. Đồ thị...", "Hình Câu 4", etc.)
   const cleanText = rawBlockText
     .replace(/@@IMAGE_TOKEN:[\s\S]*?@@/g, '')
     .replace(
       /(?:^|\n)\s*Hình\s*[123]\s*[.:]\s*Đồ\s+thị[^\n]*(?=\n|$)/gi,
+      '\n'
+    )
+    .replace(
+      /(?:^|\n)\s*Hình\s+(?:Câu\s*)?\d+\s*(?:[.:][^\n]*)?(?=\n|$)/gi,
       '\n'
     )
     .trim();
@@ -2148,6 +2152,7 @@ function stripOptionMarkers(text: string): string {
     .replace(/^\*+|\*+$/g, '')
     .replace(/\(\s*Đáp\s+án\s+đúng\s*\)/gi, '')
     .replace(/\b(?:Đáp\s*án|ĐA)\s*:\s*[A-D]\b.*$/i, '')
+    .replace(/\s*\n\s*/g, ' ')
     .trim();
 }
 
@@ -2175,10 +2180,15 @@ export function parseAnnotatedTextToExamData(
     .replace(/_/g, ' ')
     .trim();
 
-  // Remove end-of-exam footer lines ("------------Hết-----------", "--- HẾT ---") and guide banners
+  // Remove end-of-exam footer lines ("------------Hết-----------", "--- HẾT ---") and page numbers ("Trang 1/6")
   const cleanedDocumentText = rawText
     .replace(/(?:^|\n)\s*-{3,}\s*Hết\s*-{3,}[\s\S]*$/i, '')
     .replace(/(?:^|\n)\s*---\s*HẾT\s*---[\s\S]*$/i, '')
+    .replace(/(?:^|\n)\s*Trang\s+\d+\s*\/\s*\d+\s*(?=\n|$)/gi, '\n')
+    .replace(
+      /(?:^|\n)\s*ĐỀ\s+ÔN\s+LUYỆN\s+VẬT\s+L[ÍÝ]\s+\d+\s*[—–-]\s*CHUYÊN\s+ĐỀ[^\n]*(?=\n|$)/gi,
+      '\n'
+    )
     .replace(/\*+(\s*(?:\[[A-D]\.?\]|[A-D][.)]))/g, '*$1')
     .replace(/\*+(\s*[a-d][).])/g, '*$1');
 
@@ -2189,20 +2199,55 @@ export function parseAnnotatedTextToExamData(
 
   // Extract optional administrative header lines from the top 25 lines
   const adminHeader: Partial<ScrambledVariantAdminHeader> = {};
+  let detectedTopicLine = '';
   for (const line of lines.slice(0, 25)) {
+    // Handle combined 2-column header lines from PDF/Word (e.g. "SỞ GIÁO DỤC VÀ ĐÀO TẠO   ĐỀ ÔN LUYỆN...")
+    const examTitleMatch = line.match(
+      /((?:ĐỀ\s+ÔN\s+LUYỆN|ĐỀ\s+KIỂM\s+TRA|ĐỀ\s+THI|KIỂM\s+TRA|KỲ\s+THI|ĐỊNH\s+DẠNG\s+ĐỀ)[^\n]*)/i
+    );
+    if (examTitleMatch && !adminHeader.examTerm) {
+      adminHeader.examTerm = examTitleMatch[1].trim();
+    }
+    const topicMatch = line.match(/Chuyên\s+đề\s*:\s*([^\n]+)/i);
+    if (topicMatch && !detectedTopicLine) {
+      detectedTopicLine = topicMatch[1].trim();
+    }
+
     if (/^(?:SỞ\s+GIÁO\s+DỤC|SỞ\s+GD|UBND|BỘ\s+GIÁO\s+DỤC)/i.test(line)) {
-      adminHeader.governingBody = line.split('·')[0].trim();
+      const govPart = line
+        .replace(/((?:ĐỀ\s+ÔN\s+LUYỆN|ĐỀ\s+KIỂM\s+TRA|ĐỀ\s+THI|KIỂM\s+TRA|KỲ\s+THI).*)$/i, '')
+        .split('·')[0]
+        .trim();
+      if (govPart) adminHeader.governingBody = govPart;
     } else if (/^TRƯỜNG\s+/i.test(line)) {
-      adminHeader.schoolName = line.replace(/^TRƯỜNG\s+/i, '').trim();
-    } else if (/^(?:ĐỀ\s+THI|KIỂM\s+TRA|KỲ\s+THI|ĐỊNH\s+DẠNG\s+ĐỀ)/i.test(line)) {
-      adminHeader.examTerm = line.trim();
-    } else if (/Môn(?:\s+thi)?\s*:\s*([^|·\n]+)/i.test(line)) {
+      const schoolPart = line
+        .replace(/Chuyên\s+đề\s*:.*$/i, '')
+        .replace(/^TRƯỜNG\s+/i, '')
+        .trim();
+      if (schoolPart) adminHeader.schoolName = schoolPart;
+    }
+
+    if (/Môn(?:\s+thi)?\s*:\s*([^|·\n]+)/i.test(line)) {
       const m = line.match(/Môn(?:\s+thi)?\s*:\s*([^|·\n]+)/i);
       if (m) adminHeader.subjectName = m[1].trim();
+    } else if (!adminHeader.subjectName) {
+      const subjInline = line.match(/\b(VẬT\s+L[ÍÝ]\s*(?:10|11|12))\b/i);
+      if (subjInline) {
+        adminHeader.subjectName = subjInline[1].toUpperCase().replace(/\s+/g, ' ');
+      }
     }
+
     const durMatch = line.match(/Thời\s+gian(?:\s+làm\s+bài)?\s*:\s*(\d+)\s*phút/i);
     if (durMatch) {
       adminHeader.durationMinutes = Number(durMatch[1]);
+    }
+  }
+
+  if (detectedTopicLine) {
+    if (adminHeader.examTerm && !adminHeader.examTerm.includes(detectedTopicLine)) {
+      adminHeader.examTerm = `${adminHeader.examTerm} — Chuyên đề: ${detectedTopicLine}`;
+    } else if (!adminHeader.examTerm) {
+      adminHeader.examTerm = `CHUYÊN ĐỀ: ${detectedTopicLine}`;
     }
   }
 
@@ -2380,7 +2425,10 @@ export function parseAnnotatedTextToExamData(
             }
 
             const hasLeadingStarInText = stText.startsWith('*');
-            stText = stText.replace(/^\*+|\*+$/g, '').trim();
+            stText = stText
+              .replace(/^\*+|\*+$/g, '')
+              .replace(/\s*\n\s*/g, ' ')
+              .trim();
 
             rawParsedStmts.push({
               id: label,
@@ -2414,7 +2462,7 @@ export function parseAnnotatedTextToExamData(
             if (has_image) imageCount++;
             p2Questions.push({
               id: `UP-P2-${String(nextP2Idx).padStart(2, '0')}`,
-              topic: 'Vật lý — Đúng/Sai',
+              topic: detectedTopicLine || 'Vật lý — Đúng/Sai',
               stem,
               statements: [finalStmts[0], finalStmts[1], finalStmts[2], finalStmts[3]],
               points: 1.0,
@@ -2453,7 +2501,7 @@ export function parseAnnotatedTextToExamData(
             .trim();
         }
 
-        // Split options separated by 2+ spaces or tabs (Word tab stops)
+        // Split options separated by 2+ spaces or tabs (Word/PDF tab stops)
         let normalizedOptionsBlock = textWithoutTrailingKey.replace(
           /(?:\s{2,}|\t+)(\**(?:\[[A-D]\.?\]|[A-D][.)])\**)\s+/g,
           '\n$1 '
@@ -2479,7 +2527,10 @@ export function parseAnnotatedTextToExamData(
         }
 
         if (firstOptIdx > 0) {
-          const questionStem = normalizedOptionsBlock.slice(0, firstOptIdx).trim();
+          const questionStem = normalizedOptionsBlock
+            .slice(0, firstOptIdx)
+            .replace(/\s*\n\s*/g, ' ')
+            .trim();
           // Inside the options region only, also split inline B., C., D. separated by single spaces
           const optsRegion = normalizedOptionsBlock
             .slice(firstOptIdx)
@@ -2531,7 +2582,7 @@ export function parseAnnotatedTextToExamData(
             if (has_image) imageCount++;
             p1Questions.push({
               id: `UP-P1-${String(nextP1Idx).padStart(2, '0')}`,
-              topic: 'Vật lý — Nhiều lựa chọn',
+              topic: detectedTopicLine || 'Vật lý — Nhiều lựa chọn',
               question: questionStem,
               options: [opts[0], opts[1], opts[2], opts[3]],
               correctIndex: safeIdx,
@@ -2588,6 +2639,7 @@ export function parseAnnotatedTextToExamData(
         qText = qText
           .replace(/Điền\s+đáp\s+số\s*:\s*\.+.*$/im, '')
           .replace(/(?:^|\n)\s*\*?(?:Đáp\s*số|Đáp\s*án|Kết\s*quả|ĐS|ĐA)\s*[:=].*$/im, '')
+          .replace(/\s*\n\s*/g, ' ')
           .trim();
 
         if (qText.length > 5) {
@@ -2595,7 +2647,7 @@ export function parseAnnotatedTextToExamData(
           if (has_image) imageCount++;
           p3Questions.push({
             id: `UP-P3-${String(nextP3Idx).padStart(2, '0')}`,
-            topic: 'Vật lý — Trả lời ngắn',
+            topic: detectedTopicLine || 'Vật lý — Trả lời ngắn',
             question: qText,
             answer: cleanNumeric,
             correct_value: cleanNumeric,
@@ -2649,6 +2701,1203 @@ export function parseAnnotatedTextToExamData(
     part2Count: finalPart2.length,
     part3Count: finalPart3.length,
     imageCount: finalImageCount,
+  };
+}
+
+/**
+ * CRC32 lookup table for encoding raw RGB PDF Image XObjects into lossless PNG Data URIs
+ */
+const PNG_CRC32_TABLE: Uint32Array = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+function computePngCrc32(bytes: Uint8Array): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) {
+    c = PNG_CRC32_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function makePngChunk(typeAscii: string, data: Uint8Array): Uint8Array {
+  const chunk = new Uint8Array(12 + data.length);
+  const view = new DataView(chunk.buffer);
+  view.setUint32(0, data.length, false);
+  for (let i = 0; i < 4; i++) {
+    chunk[4 + i] = typeAscii.charCodeAt(i);
+  }
+  chunk.set(data, 8);
+  const crc = computePngCrc32(chunk.subarray(4, 8 + data.length));
+  view.setUint32(8 + data.length, crc, false);
+  return chunk;
+}
+
+/**
+ * Encode raw 8-bit RGB/Grayscale/RGBA pixels from a PDF /FlateDecode Image XObject into a PNG data URI
+ */
+async function encodeRawPdfPixelsToPngDataUri(
+  width: number,
+  height: number,
+  rawPixels: Uint8Array
+): Promise<string | null> {
+  if (width <= 0 || height <= 0) return null;
+  const pixelCount = width * height;
+  let colorType = 2; // RGB
+  let channels = 3;
+  if (rawPixels.length === pixelCount * 3) {
+    colorType = 2;
+    channels = 3;
+  } else if (rawPixels.length === pixelCount * 4) {
+    colorType = 6;
+    channels = 4;
+  } else if (rawPixels.length === pixelCount) {
+    colorType = 0;
+    channels = 1;
+  } else {
+    return null;
+  }
+
+  const rowStride = width * channels;
+  const filteredScanlines = new Uint8Array((rowStride + 1) * height);
+  for (let y = 0; y < height; y++) {
+    const dstOffset = y * (rowStride + 1);
+    filteredScanlines[dstOffset] = 0; // Filter type 0 (None)
+    const srcOffset = y * rowStride;
+    filteredScanlines.set(rawPixels.subarray(srcOffset, srcOffset + rowStride), dstOffset + 1);
+  }
+
+  let zlibStreamBytes: Uint8Array | null = null;
+  if (typeof CompressionStream !== 'undefined') {
+    try {
+      const cs = new CompressionStream('deflate');
+      const writer = cs.writable.getWriter();
+      writer.write(filteredScanlines);
+      writer.close();
+      const resp = new Response(cs.readable);
+      const ab = await resp.arrayBuffer();
+      zlibStreamBytes = new Uint8Array(ab);
+    } catch {
+      zlibStreamBytes = null;
+    }
+  }
+
+  if (!zlibStreamBytes) return null;
+
+  const signature = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdrData = new Uint8Array(13);
+  const ihdrView = new DataView(ihdrData.buffer);
+  ihdrView.setUint32(0, width, false);
+  ihdrView.setUint32(4, height, false);
+  ihdrData[8] = 8; // Bit depth 8
+  ihdrData[9] = colorType;
+  ihdrData[10] = 0;
+  ihdrData[11] = 0;
+  ihdrData[12] = 0;
+
+  const ihdrChunk = makePngChunk('IHDR', ihdrData);
+  const idatChunk = makePngChunk('IDAT', zlibStreamBytes);
+  const iendChunk = makePngChunk('IEND', new Uint8Array(0));
+
+  const totalLen = signature.length + ihdrChunk.length + idatChunk.length + iendChunk.length;
+  const pngBytes = new Uint8Array(totalLen);
+  let offset = 0;
+  pngBytes.set(signature, offset);
+  offset += signature.length;
+  pngBytes.set(ihdrChunk, offset);
+  offset += ihdrChunk.length;
+  pngBytes.set(idatChunk, offset);
+  offset += idatChunk.length;
+  pngBytes.set(iendChunk, offset);
+
+  return `data:image/png;base64,${uint8ArrayToBase64(pngBytes)}`;
+}
+
+/**
+ * Decompress a PDF FlateDecode stream using browser/Node DecompressionStream
+ */
+async function inflatePdfFlateStream(compressedBytes: Uint8Array): Promise<Uint8Array | null> {
+  if (typeof DecompressionStream === 'undefined') return null;
+  const copyBytes = new Uint8Array(compressedBytes.byteLength);
+  copyBytes.set(compressedBytes);
+  for (const format of ['deflate', 'deflate-raw'] as const) {
+    try {
+      const ds = new DecompressionStream(format);
+      const writer = ds.writable.getWriter();
+      const writePromise = writer.write(copyBytes).then(() => writer.close());
+      const resp = new Response(ds.readable);
+      const [ab] = await Promise.all([resp.arrayBuffer(), writePromise]);
+      return new Uint8Array(ab);
+    } catch {
+      // try next format
+    }
+  }
+  return null;
+}
+
+function uint8ArrayToLatin1(bytes: Uint8Array): string {
+  let out = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const sub = bytes.subarray(i, i + chunkSize);
+    out += String.fromCharCode(...sub);
+  }
+  return out;
+}
+
+/**
+ * Extract Unicode text AND embedded diagram images from a PDF ArrayBuffer in exact top-to-bottom page Y order.
+ * Supports ToUnicode CMap fonts (2-byte CID fonts and 1-byte fonts), TJ/Tj operators, and Image XObjects.
+ */
+export async function extractTextAndImagesFromPdfBuffer(
+  buffer: ArrayBuffer,
+  includeImages: boolean = true
+): Promise<string> {
+  const bytes = new Uint8Array(buffer);
+  const utf8Decoder = new TextDecoder('utf-8');
+  const rawPdf = uint8ArrayToLatin1(bytes);
+
+  // 1. Parse all indirect PDF objects: "<id> 0 obj ... endobj"
+  interface PdfParsedObject {
+    id: number;
+    dictText: string;
+    bodyText: string;
+    streamBytes: Uint8Array | null;
+  }
+
+  const objectsMap = new Map<number, PdfParsedObject>();
+  const objHeaderRegex = /(?:^|\r|\n)(\d+)\s+0\s+obj\b/g;
+  const objStarts: { id: number; headerEnd: number; matchStart: number }[] = [];
+  let hm: RegExpExecArray | null;
+  while ((hm = objHeaderRegex.exec(rawPdf)) !== null) {
+    objStarts.push({
+      id: Number(hm[1]),
+      matchStart: hm.index,
+      headerEnd: hm.index + hm[0].length,
+    });
+  }
+
+  for (let i = 0; i < objStarts.length; i++) {
+    const cur = objStarts[i];
+    const nextStart = i + 1 < objStarts.length ? objStarts[i + 1].matchStart : rawPdf.length;
+    const endObjPos = rawPdf.indexOf('endobj', cur.headerEnd);
+    const sliceEnd = endObjPos !== -1 && endObjPos < nextStart ? endObjPos : nextStart;
+    const bodyText = rawPdf.slice(cur.headerEnd, sliceEnd);
+
+    const streamMatch = bodyText.match(/stream(?:\r\n|\n|\r)/);
+    let dictText = bodyText;
+    let streamBytes: Uint8Array | null = null;
+
+    if (streamMatch && streamMatch.index !== undefined) {
+      dictText = bodyText.slice(0, streamMatch.index);
+      const streamStartInObj = streamMatch.index + streamMatch[0].length;
+      const endStreamIdx = bodyText.lastIndexOf('endstream');
+      if (endStreamIdx > streamStartInObj) {
+        let absStart = cur.headerEnd + streamStartInObj;
+        let absEnd = cur.headerEnd + endStreamIdx;
+        if (bytes[absEnd - 1] === 0x0a) {
+          absEnd--;
+          if (bytes[absEnd - 1] === 0x0d) absEnd--;
+        } else if (bytes[absEnd - 1] === 0x0d) {
+          absEnd--;
+        }
+        if (absEnd > absStart) {
+          streamBytes = bytes.subarray(absStart, absEnd);
+        }
+      }
+    }
+
+    objectsMap.set(cur.id, {
+      id: cur.id,
+      dictText,
+      bodyText,
+      streamBytes,
+    });
+  }
+
+  // 2. Helper to get decompressed stream bytes from an object ID
+  const decompressedCache = new Map<number, Uint8Array | null>();
+  const getDecompressedStream = async (objId: number): Promise<Uint8Array | null> => {
+    if (decompressedCache.has(objId)) return decompressedCache.get(objId) || null;
+    const obj = objectsMap.get(objId);
+    if (!obj || !obj.streamBytes) {
+      decompressedCache.set(objId, null);
+      return null;
+    }
+    if (/\/Filter\s*(?:\[\s*)?\/FlateDecode\b/.test(obj.dictText)) {
+      const inflated = await inflatePdfFlateStream(obj.streamBytes);
+      decompressedCache.set(objId, inflated);
+      return inflated;
+    }
+    decompressedCache.set(objId, obj.streamBytes);
+    return obj.streamBytes;
+  };
+
+  // 3. Parse ToUnicode CMaps for all font objects
+  const parseToUnicodeCMap = (cmapText: string): Map<number, string> => {
+    const map = new Map<number, string>();
+    const hexToUnicodeStr = (hex: string): string => {
+      const clean = hex.replace(/\s+/g, '');
+      if (!clean) return '';
+      if (clean.length <= 2) {
+        return String.fromCharCode(parseInt(clean, 16));
+      }
+      let out = '';
+      for (let i = 0; i < clean.length; i += 4) {
+        const chunk = clean.slice(i, i + 4);
+        if (chunk.length === 4) {
+          out += String.fromCharCode(parseInt(chunk, 16));
+        }
+      }
+      return out;
+    };
+
+    const bfRangeBlocks = cmapText.matchAll(/beginbfrange([\s\S]*?)endbfrange/g);
+    for (const blk of bfRangeBlocks) {
+      const content = blk[1];
+      const rangeRegex =
+        /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:<([0-9A-Fa-f]+)>|\[([^\]]+)\])/g;
+      let rm: RegExpExecArray | null;
+      while ((rm = rangeRegex.exec(content)) !== null) {
+        const startCode = parseInt(rm[1], 16);
+        const endCode = parseInt(rm[2], 16);
+        if (rm[3]) {
+          let targetCode = parseInt(rm[3], 16);
+          for (let c = startCode; c <= endCode; c++) {
+            map.set(c, String.fromCodePoint(targetCode++));
+          }
+        } else if (rm[4]) {
+          const items = [...rm[4].matchAll(/<([0-9A-Fa-f]+)>/g)].map((x) =>
+            hexToUnicodeStr(x[1])
+          );
+          for (let c = startCode; c <= endCode && c - startCode < items.length; c++) {
+            map.set(c, items[c - startCode]);
+          }
+        }
+      }
+    }
+
+    const bfCharBlocks = cmapText.matchAll(/beginbfchar([\s\S]*?)endbfchar/g);
+    for (const blk of bfCharBlocks) {
+      const content = blk[1];
+      const charRegex = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g;
+      let cm: RegExpExecArray | null;
+      while ((cm = charRegex.exec(content)) !== null) {
+        const code = parseInt(cm[1], 16);
+        map.set(code, hexToUnicodeStr(cm[2]));
+      }
+    }
+
+    return map;
+  };
+
+  // Map fontObjId -> CMap
+  const fontObjCMap = new Map<number, Map<number, string>>();
+  for (const [objId, obj] of objectsMap.entries()) {
+    const toUniMatch = obj.bodyText.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
+    if (toUniMatch) {
+      const cmapObjId = Number(toUniMatch[1]);
+      const cmapBytes = await getDecompressedStream(cmapObjId);
+      if (cmapBytes) {
+        const cmapText = utf8Decoder.decode(cmapBytes);
+        fontObjCMap.set(objId, parseToUnicodeCMap(cmapText));
+      }
+    }
+  }
+
+  // Build global fallback font name -> CMap (e.g. /TT2 -> CMap)
+  const globalFontNameCMap = new Map<string, Map<number, string>>();
+  for (const obj of objectsMap.values()) {
+    const fontDictMatches = obj.bodyText.matchAll(/\/(TT\d+|F\d+|C\d+|T\d+)\s+(\d+)\s+0\s+R/g);
+    for (const fm of fontDictMatches) {
+      const fontName = fm[1];
+      const fObjId = Number(fm[2]);
+      const cmap = fontObjCMap.get(fObjId);
+      if (cmap && !globalFontNameCMap.has(fontName)) {
+        globalFontNameCMap.set(fontName, cmap);
+      }
+    }
+  }
+
+  // 4. Decode Image XObjects if requested
+  const imageObjDataUriCache = new Map<number, string>();
+  const getImageXObjectDataUri = async (imgObjId: number): Promise<string | null> => {
+    if (!includeImages) return null;
+    if (imageObjDataUriCache.has(imgObjId)) return imageObjDataUriCache.get(imgObjId) || null;
+    const obj = objectsMap.get(imgObjId);
+    if (!obj || !/\/Subtype\s*\/Image\b/.test(obj.dictText) || !obj.streamBytes) {
+      return null;
+    }
+
+    // Direct JPEG stream (/DCTDecode)
+    if (/\/Filter\s*(?:\[\s*)?\/DCTDecode\b/.test(obj.dictText)) {
+      const uri = `data:image/jpeg;base64,${uint8ArrayToBase64(obj.streamBytes)}`;
+      imageObjDataUriCache.set(imgObjId, uri);
+      return uri;
+    }
+
+    // Raw FlateDecode bitmap (/FlateDecode)
+    const widthMatch = obj.dictText.match(/\/Width\s+(\d+)/);
+    const heightMatch = obj.dictText.match(/\/Height\s+(\d+)/);
+    if (widthMatch && heightMatch) {
+      const w = Number(widthMatch[1]);
+      const h = Number(heightMatch[1]);
+      const rawPixels = await getDecompressedStream(imgObjId);
+      if (rawPixels) {
+        const pngUri = await encodeRawPdfPixelsToPngDataUri(w, h, rawPixels);
+        if (pngUri) {
+          imageObjDataUriCache.set(imgObjId, pngUri);
+          return pngUri;
+        }
+      }
+    }
+    return null;
+  };
+
+  // Global fallback XObject name -> object ID (e.g. /Im1 -> 12)
+  const globalXObjectMap = new Map<string, number>();
+  for (const obj of objectsMap.values()) {
+    const xobjMatches = obj.bodyText.matchAll(/\/(Im\d+|X\d+|Img\d+)\s+(\d+)\s+0\s+R/g);
+    for (const xm of xobjMatches) {
+      globalXObjectMap.set(xm[1], Number(xm[2]));
+    }
+  }
+
+  // 5. Find all /Type /Page objects in document order
+  const pageObjects: PdfParsedObject[] = [];
+  for (const obj of objectsMap.values()) {
+    if (/\/Type\s*\/Page\b(?!s)/.test(obj.dictText)) {
+      pageObjects.push(obj);
+    }
+  }
+
+  // Decode PDF literal string bytes `(...)` handling octal escapes \ddd and escaped parentheses
+  const decodePdfLiteralBytes = (litInner: string): number[] => {
+    const out: number[] = [];
+    for (let i = 0; i < litInner.length; i++) {
+      const ch = litInner[i];
+      if (ch === '\\') {
+        i++;
+        if (i >= litInner.length) break;
+        const esc = litInner[i];
+        if (esc >= '0' && esc <= '7') {
+          let oct = esc;
+          if (i + 1 < litInner.length && litInner[i + 1] >= '0' && litInner[i + 1] <= '7') {
+            oct += litInner[++i];
+          }
+          if (i + 1 < litInner.length && litInner[i + 1] >= '0' && litInner[i + 1] <= '7') {
+            oct += litInner[++i];
+          }
+          out.push(parseInt(oct, 8));
+        } else if (esc === 'n') {
+          out.push(10);
+        } else if (esc === 'r') {
+          out.push(13);
+        } else if (esc === 't') {
+          out.push(9);
+        } else if (esc === 'b') {
+          out.push(8);
+        } else if (esc === 'f') {
+          out.push(12);
+        } else if (esc === '\r') {
+          if (i + 1 < litInner.length && litInner[i + 1] === '\n') i++;
+        } else if (esc === '\n') {
+          // line continuation
+        } else {
+          out.push(esc.charCodeAt(0) & 0xff);
+        }
+      } else {
+        out.push(ch.charCodeAt(0) & 0xff);
+      }
+    }
+    return out;
+  };
+
+  const decodeFontBytesToUnicode = (
+    rawBytes: number[],
+    cmap: Map<number, string> | undefined
+  ): string => {
+    if (!cmap || cmap.size === 0) {
+      return rawBytes.map((b) => String.fromCharCode(b)).join('');
+    }
+    // Detect if CMap uses 2-byte codes (Identity-H / CIDType2)
+    let isTwoByteCMap = false;
+    for (const k of cmap.keys()) {
+      if (k > 0xff) {
+        isTwoByteCMap = true;
+        break;
+      }
+    }
+    // Even if all keys happen to be <= 0xff, if rawBytes has even length and starts with 0x00, it's 2-byte big-endian
+    if (!isTwoByteCMap && rawBytes.length >= 2 && rawBytes.length % 2 === 0 && rawBytes[0] === 0) {
+      isTwoByteCMap = true;
+    }
+
+    let out = '';
+    if (isTwoByteCMap && rawBytes.length % 2 === 0) {
+      for (let i = 0; i < rawBytes.length; i += 2) {
+        const code = (rawBytes[i] << 8) | rawBytes[i + 1];
+        const mapped = cmap.get(code);
+        if (mapped !== undefined) {
+          out += mapped;
+        }
+      }
+    } else {
+      for (let i = 0; i < rawBytes.length; i++) {
+        const code = rawBytes[i];
+        const mapped = cmap.get(code);
+        out += mapped !== undefined ? mapped : String.fromCharCode(code);
+      }
+    }
+    return out;
+  };
+
+  const decodeTjArgument = (argText: string, cmap: Map<number, string> | undefined): string => {
+    let result = '';
+    let i = 0;
+    while (i < argText.length) {
+      if (argText[i] === '(') {
+        let depth = 1;
+        let inner = '';
+        i++;
+        while (i < argText.length && depth > 0) {
+          if (argText[i] === '\\') {
+            inner += argText[i];
+            i++;
+            if (i < argText.length) {
+              inner += argText[i];
+              i++;
+            }
+            continue;
+          }
+          if (argText[i] === '(') depth++;
+          else if (argText[i] === ')') {
+            depth--;
+            if (depth === 0) {
+              i++;
+              break;
+            }
+          }
+          inner += argText[i];
+          i++;
+        }
+        result += decodeFontBytesToUnicode(decodePdfLiteralBytes(inner), cmap);
+      } else if (argText[i] === '<' && argText[i + 1] !== '<') {
+        const closeIdx = argText.indexOf('>', i + 1);
+        if (closeIdx === -1) break;
+        const hexStr = argText.slice(i + 1, closeIdx).replace(/\s+/g, '');
+        const rawBytes: number[] = [];
+        for (let h = 0; h < hexStr.length; h += 2) {
+          rawBytes.push(parseInt(hexStr.slice(h, h + 2).padEnd(2, '0'), 16));
+        }
+        result += decodeFontBytesToUnicode(rawBytes, cmap);
+        i = closeIdx + 1;
+      } else if (argText[i] === '-' || (argText[i] >= '0' && argText[i] <= '9')) {
+        // Numeric kerning adjustment inside TJ array: large negative values (< -180) indicate word space
+        let numStr = '';
+        while (
+          i < argText.length &&
+          (argText[i] === '-' ||
+            argText[i] === '.' ||
+            (argText[i] >= '0' && argText[i] <= '9'))
+        ) {
+          numStr += argText[i++];
+        }
+        const kernVal = Number(numStr);
+        if (!Number.isNaN(kernVal) && kernVal < -180 && !result.endsWith(' ')) {
+          result += ' ';
+        }
+      } else {
+        i++;
+      }
+    }
+    return result;
+  };
+
+  const allPagesOutputLines: string[] = [];
+
+  for (const pageObj of pageObjects) {
+    // Resolve page-specific font map and XObject map (checking both inline page dict and indirect /Resources N 0 R)
+    const pageFontCMap = new Map<string, Map<number, string>>(globalFontNameCMap);
+    const pageXObjectMap = new Map<string, number>(globalXObjectMap);
+
+    let resourceTextToScan = pageObj.dictText;
+    const resRefMatch = pageObj.dictText.match(/\/Resources\s+(\d+)\s+0\s+R/);
+    if (resRefMatch) {
+      const resObj = objectsMap.get(Number(resRefMatch[1]));
+      if (resObj) {
+        resourceTextToScan += '\n' + resObj.bodyText;
+        // Also check if /Font or /XObject inside Resources are indirect references
+        const fontSubRef = resObj.bodyText.match(/\/Font\s+(\d+)\s+0\s+R/);
+        if (fontSubRef) {
+          const fontDictObj = objectsMap.get(Number(fontSubRef[1]));
+          if (fontDictObj) resourceTextToScan += '\n' + fontDictObj.bodyText;
+        }
+        const xobjSubRef = resObj.bodyText.match(/\/XObject\s+(\d+)\s+0\s+R/);
+        if (xobjSubRef) {
+          const xobjDictObj = objectsMap.get(Number(xobjSubRef[1]));
+          if (xobjDictObj) resourceTextToScan += '\n' + xobjDictObj.bodyText;
+        }
+      }
+    }
+
+    const pageFontMatches = resourceTextToScan.matchAll(/\/(TT\d+|F\d+|C\d+|T\d+)\s+(\d+)\s+0\s+R/g);
+    for (const fm of pageFontMatches) {
+      const cmap = fontObjCMap.get(Number(fm[2]));
+      if (cmap) pageFontCMap.set(fm[1], cmap);
+    }
+
+    const pageXObjMatches = resourceTextToScan.matchAll(/\/(Im\d+|X\d+|Img\d+)\s+(\d+)\s+0\s+R/g);
+    for (const xm of pageXObjMatches) {
+      pageXObjectMap.set(xm[1], Number(xm[2]));
+    }
+
+    // Resolve content stream object IDs for this page
+    const contentObjIds: number[] = [];
+    const arrayContentsMatch = pageObj.dictText.match(/\/Contents\s*\[([^\]]+)\]/);
+    if (arrayContentsMatch) {
+      const refs = arrayContentsMatch[1].matchAll(/(\d+)\s+0\s+R/g);
+      for (const r of refs) contentObjIds.push(Number(r[1]));
+    } else {
+      const singleContentsMatch = pageObj.dictText.match(/\/Contents\s+(\d+)\s+0\s+R/);
+      if (singleContentsMatch) {
+        contentObjIds.push(Number(singleContentsMatch[1]));
+      }
+    }
+
+    let combinedStreamText = '';
+    for (const cId of contentObjIds) {
+      const sBytes = await getDecompressedStream(cId);
+      if (sBytes) {
+        combinedStreamText += uint8ArrayToLatin1(sBytes) + '\n';
+      }
+    }
+    if (!combinedStreamText) continue;
+
+    interface PagePositionedItem {
+      y: number;
+      x: number;
+      fontSize: number;
+      isScript: boolean;
+      text: string;
+      isImage?: boolean;
+    }
+
+    const pageItems: PagePositionedItem[] = [];
+    let currentFontName = 'TT2';
+    let tfSize = 1;
+    let tmScale = 12;
+    let tmX = 0;
+    let tmY = 0;
+    let lineLeading = 14;
+
+    // Graphics state CTM stack (q / Q / cm)
+    let cmA = 1;
+    let cmD = 1;
+    let cmE = 0;
+    let cmF = 0;
+    const ctmStack: { a: number; d: number; e: number; f: number }[] = [];
+
+    // Tokenize the page content stream across newlines, keeping (...) literal strings and [...] TJ arrays intact
+    const tokenRegex =
+      /\b(q|Q|BT|ET|T\*)\b|([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+(cm|Tm)\b|\/(TT\d+|F\d+|C\d+|T\d+)\s+([+-]?\d+(?:\.\d+)?)\s+Tf\b|([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+(Td|TD)\b|([+-]?\d+(?:\.\d+)?)\s+TL\b|\/(Im\d+|X\d+|Img\d+)\s+Do\b|(\[(?:(?:\((?:[^\\()]|\\.)*\))|<[0-9A-Fa-f\s]*>|[^\\\]]|\\.)*\]|\((?:[^\\()]|\\.)*\)|<[0-9A-Fa-f\s]+>)\s*(Tj|TJ)\b/g;
+
+    let tok: RegExpExecArray | null;
+    while ((tok = tokenRegex.exec(combinedStreamText)) !== null) {
+      const stateOp = tok[1];
+      if (stateOp === 'q') {
+        ctmStack.push({ a: cmA, d: cmD, e: cmE, f: cmF });
+        continue;
+      }
+      if (stateOp === 'Q') {
+        const popped = ctmStack.pop();
+        if (popped) {
+          cmA = popped.a;
+          cmD = popped.d;
+          cmE = popped.e;
+          cmF = popped.f;
+        } else {
+          cmA = 1;
+          cmD = 1;
+          cmE = 0;
+          cmF = 0;
+        }
+        continue;
+      }
+      if (stateOp === 'T*') {
+        tmY -= lineLeading;
+        continue;
+      }
+      if (stateOp === 'BT' || stateOp === 'ET') {
+        continue;
+      }
+
+      // 6-number matrix operator: cm or Tm
+      if (tok[8] === 'cm') {
+        const a = Number(tok[2]);
+        const d = Number(tok[5]);
+        const e = Number(tok[6]);
+        const f = Number(tok[7]);
+        // Compose with active CTM
+        cmE = cmA * e + cmE;
+        cmF = cmD * f + cmF;
+        cmA = cmA * a;
+        cmD = cmD * d;
+        continue;
+      }
+      if (tok[8] === 'Tm') {
+        const dVal = Math.abs(Number(tok[5])) || Math.abs(Number(tok[2])) || 1;
+        tmScale = dVal;
+        tmX = Number(tok[6]);
+        tmY = Number(tok[7]);
+        continue;
+      }
+
+      // Font operator: /TTx size Tf
+      if (tok[9] !== undefined) {
+        currentFontName = tok[9];
+        tfSize = Math.abs(Number(tok[10])) || 1;
+        continue;
+      }
+
+      // Text offset operator: dx dy Td / TD
+      if (tok[13] !== undefined) {
+        const dx = Number(tok[11]);
+        const dy = Number(tok[12]);
+        if (tok[13] === 'TD') {
+          lineLeading = -dy;
+        }
+        tmX += dx;
+        tmY += dy;
+        continue;
+      }
+
+      // Text leading: leading TL
+      if (tok[14] !== undefined) {
+        lineLeading = Number(tok[14]);
+        continue;
+      }
+
+      // Image XObject draw: /ImX Do
+      if (tok[15] !== undefined) {
+        if (includeImages) {
+          const xName = tok[15];
+          const xObjId = pageXObjectMap.get(xName);
+          if (xObjId !== undefined) {
+            const dataUri = await getImageXObjectDataUri(xObjId);
+            if (dataUri) {
+              // In PDF, an image fills unit square [0,1]x[0,1] transformed by current CTM (cmE, cmF, cmA, cmD)
+              const imgCenterPageY = cmF + cmD * 0.5;
+              pageItems.push({
+                y: imgCenterPageY,
+                x: cmE,
+                fontSize: 11,
+                isScript: false,
+                text: `@@IMAGE_TOKEN:${dataUri}@@`,
+                isImage: true,
+              });
+            }
+          }
+        }
+        continue;
+      }
+
+      // Text draw: (...) Tj or [...] TJ
+      if (tok[16] !== undefined) {
+        const decodedText = decodeTjArgument(
+          tok[16],
+          pageFontCMap.get(currentFontName)
+        );
+        if (decodedText) {
+          const pageX = cmE + cmA * tmX;
+          const pageY = cmF + cmD * tmY;
+          const fontSizePt = Math.abs(cmD) * tmScale * tfSize || 11;
+          pageItems.push({
+            y: pageY,
+            x: pageX,
+            fontSize: fontSizePt,
+            isScript: fontSizePt < 9.4,
+            text: decodedText,
+          });
+        }
+      }
+    }
+
+    // Group text items into horizontal visual lines (merging subscripts/superscripts whose Y differs by <= 4.8pt)
+    interface VisualLineGroup {
+      baseY: number;
+      isImage: boolean;
+      items: PagePositionedItem[];
+    }
+
+    const lineGroups: VisualLineGroup[] = [];
+    for (const item of pageItems) {
+      if (item.isImage) {
+        lineGroups.push({
+          baseY: item.y,
+          isImage: true,
+          items: [item],
+        });
+        continue;
+      }
+
+      // Find an existing text line group within Y tolerance
+      const yTol = item.isScript ? 4.8 : 2.6;
+      let targetGroup: VisualLineGroup | undefined;
+      for (let gIdx = lineGroups.length - 1; gIdx >= 0; gIdx--) {
+        const g = lineGroups[gIdx];
+        if (!g.isImage && Math.abs(g.baseY - item.y) <= yTol) {
+          targetGroup = g;
+          break;
+        }
+      }
+
+      if (targetGroup) {
+        targetGroup.items.push(item);
+        if (!item.isScript) {
+          targetGroup.baseY = item.y;
+        }
+      } else {
+        lineGroups.push({
+          baseY: item.y,
+          isImage: false,
+          items: [item],
+        });
+      }
+    }
+
+    // Sort visual lines on this page top-to-bottom (descending Y)
+    lineGroups.sort((a, b) => b.baseY - a.baseY);
+
+    for (const group of lineGroups) {
+      if (group.isImage) {
+        allPagesOutputLines.push(group.items[0].text);
+        continue;
+      }
+
+      // Sort items left-to-right by X coordinate
+      group.items.sort((a, b) => a.x - b.x);
+
+      let lineStr = '';
+      let prevItem: PagePositionedItem | null = null;
+
+      for (const it of group.items) {
+        let piece = it.text;
+        // Format superscript / subscript runs when smaller font is offset vertically from baseY
+        if (it.isScript && Math.abs(it.y - group.baseY) >= 1.0 && piece.trim()) {
+          const cleanScript = piece.trim();
+          if (it.y > group.baseY + 1.0) {
+            piece = cleanScript.length > 1 ? `^{${cleanScript}}` : `^${cleanScript}`;
+          } else if (it.y < group.baseY - 1.0) {
+            piece = cleanScript.length > 1 ? `_{${cleanScript}}` : `_${cleanScript}`;
+          }
+        }
+
+        if (prevItem) {
+          const estPrevWidth = prevItem.text.length * (prevItem.fontSize * 0.56);
+          const xGap = it.x - (prevItem.x + estPrevWidth);
+          if (xGap > 22) {
+            lineStr += '   ';
+          } else if (
+            xGap > 8.5 &&
+            !lineStr.endsWith(' ') &&
+            !piece.startsWith(' ') &&
+            !it.isScript &&
+            !prevItem.isScript
+          ) {
+            lineStr += ' ';
+          }
+        }
+
+        lineStr += piece;
+        prevItem = it;
+      }
+
+      const trimmedLine = lineStr.trim();
+      if (trimmedLine) {
+        allPagesOutputLines.push(trimmedLine);
+      }
+    }
+  }
+
+  return allPagesOutputLines.join('\n');
+}
+
+/**
+ * Extract raw readable text from any uploaded document (.pdf, .docx, .doc, .txt, .json)
+ * Used for both Phần A (exam questions) and Phần B (detailed solution & answer key files).
+ */
+export async function extractRawTextFromUploadedDocument(file: File): Promise<string> {
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith('.pdf')) {
+    const buffer = await file.arrayBuffer();
+    return await extractTextAndImagesFromPdfBuffer(buffer, false);
+  }
+  if (lowerName.endsWith('.docx')) {
+    const buffer = await file.arrayBuffer();
+    const extracted = await extractTextAndImagesFromDocxBuffer(buffer);
+    return extracted.replace(/@@IMAGE_TOKEN:[\s\S]*?@@/g, '').trim();
+  }
+  const rawText = await file.text();
+  if (/<html|<body|<div|<p|<table/i.test(rawText)) {
+    return convertHtmlDocToAnnotatedText(rawText)
+      .replace(/@@IMAGE_TOKEN:[\s\S]*?@@/g, '')
+      .trim();
+  }
+  return rawText.trim();
+}
+
+/**
+ * Parse a Phần B Detailed Solution & Answer Key document (matching "(PHẦN B)DAP_AN_LOI_GIAI_CHI_TIET.pdf"
+ * or Word/TXT solution files) and synchronize all official answers AND detailed explanations into baseExam.
+ */
+export function parseAndMergeDetailedSolutionDocument(
+  rawSolutionText: string,
+  baseExam: ExamData
+): {
+  mergedExam: ExamData;
+  formattedSolutionSummary: string;
+  matchedQuestionCount: number;
+} {
+  const p1Len = baseExam.part1.length;
+  const p2Len = baseExam.part2.length;
+  const p3Len = baseExam.part3.length;
+  const letterToIdx: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
+  const idxToLetter: ('A' | 'B' | 'C' | 'D')[] = ['A', 'B', 'C', 'D'];
+
+  // Clean page headers/footers from solution text
+  const cleanedText = rawSolutionText
+    .replace(/(?:^|\n)\s*Trang\s+\d+\s*\/\s*\d+\s*(?=\n|$)/gi, '\n')
+    .replace(
+      /(?:^|\n)\s*HƯỚNG\s+DẪN\s+CHẤM\s+VÀ\s+ĐÁP\s+ÁN\s+CHI\s+TIẾT[^\n]*(?=\n|$)/gi,
+      '\n'
+    )
+    .replace(/(?:^|\n)\s*---\s*HẾT\s*---[\s\S]*$/i, '')
+    .trim();
+
+  const lines = cleanedText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  // 1. Parse Quick Answer Tables ("BẢNG ĐÁP ÁN NHANH") if present
+  const quickPart1Answers: Record<number, 'A' | 'B' | 'C' | 'D'> = {};
+  const quickPart2Answers: Record<number, Record<'a' | 'b' | 'c' | 'd', boolean>> = {};
+  const quickPart3Answers: Record<number, string> = {};
+
+  let activeP2TableQuestionCols: number[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Match Part I or Part III table header row: "Câu   1   2   3   4..."
+    if (/^Câu(?:\s+\d+){2,}/i.test(line) && i + 1 < lines.length) {
+      const qNums = [...line.matchAll(/\b(\d{1,2})\b/g)].map((m) => Number(m[1]));
+      const nextLine = lines[i + 1];
+      if (/^(?:Đ\/A|Đáp\s+án|ĐA)\b/i.test(nextLine)) {
+        const valRegion = nextLine.replace(/^(?:Đ\/A|Đáp\s+án|ĐA)\s*/i, '').trim();
+        const tokens = valRegion.split(/\s+/).filter(Boolean);
+        if (tokens.length === qNums.length) {
+          for (let k = 0; k < qNums.length; k++) {
+            const qn = qNums[k];
+            const tok = tokens[k].toUpperCase();
+            if (/^[A-D]$/.test(tok)) {
+              quickPart1Answers[qn] = tok as 'A' | 'B' | 'C' | 'D';
+            } else if (/^[+-]?\d+(?:[.,]\d+)?$/.test(tokens[k])) {
+              quickPart3Answers[qn] = tokens[k];
+            }
+          }
+          i++;
+          continue;
+        }
+      }
+    }
+
+    // Match Part II table header row: "Lệnh hỏi   Câu 19   Câu 20   Câu 21   Câu 22"
+    if (/Lệnh\s+hỏi/i.test(line) && /Câu\s+\d+/i.test(line)) {
+      activeP2TableQuestionCols = [...line.matchAll(/Câu\s+(\d{1,2})/gi)].map((m) =>
+        Number(m[1])
+      );
+      for (const qn of activeP2TableQuestionCols) {
+        if (!quickPart2Answers[qn]) {
+          quickPart2Answers[qn] = { a: false, b: false, c: false, d: false };
+        }
+      }
+      continue;
+    }
+
+    // Match Part II table row: "Ý a)   Đ   Đ   Đ   Đ"
+    const p2RowMatch = line.match(/^(?:Ý\s*)?([a-d])\)\s+((?:[ĐDS]\s*)+)$/i);
+    if (p2RowMatch && activeP2TableQuestionCols.length > 0) {
+      const stmtKey = p2RowMatch[1].toLowerCase() as 'a' | 'b' | 'c' | 'd';
+      const truthTokens = p2RowMatch[2].trim().split(/\s+/);
+      for (
+        let k = 0;
+        k < activeP2TableQuestionCols.length && k < truthTokens.length;
+        k++
+      ) {
+        const qn = activeP2TableQuestionCols[k];
+        if (!quickPart2Answers[qn]) {
+          quickPart2Answers[qn] = { a: false, b: false, c: false, d: false };
+        }
+        quickPart2Answers[qn][stmtKey] = /^[ĐD]$/i.test(truthTokens[k]);
+      }
+      continue;
+    }
+
+    // Also support compact inline pairs like "1.B | 2.B | 3.A"
+    if (/BẢNG\s+ĐÁP\s+ÁN|ĐÁP\s+ÁN\s+PHẦN\s+I/i.test(line)) {
+      const inlinePairs = line.matchAll(/\b(\d{1,2})\s*[.:-]\s*([A-D])\b/gi);
+      for (const m of inlinePairs) {
+        quickPart1Answers[Number(m[1])] = m[2].toUpperCase() as 'A' | 'B' | 'C' | 'D';
+      }
+    }
+  }
+
+  // 2. Parse Detailed Question Blocks ("Câu 1: ...", "Câu 19: ...", "Câu 23: ...")
+  const detailedBlocksByNum: Record<number, string> = {};
+  const taggedForBlocks = cleanedText.replace(
+    /(?:^|\n)\s*Câu\s+(\d{1,3})\s*[:.]\s*/gi,
+    '\n@@SOL_Q_BLOCK:$1@@ '
+  );
+  const rawChunks = taggedForBlocks.split(/@@SOL_Q_BLOCK:(\d{1,3})@@/);
+  for (let i = 1; i < rawChunks.length; i += 2) {
+    const qNum = Number(rawChunks[i]);
+    let body = (rawChunks[i + 1] || '').trim();
+    // Strip trailing section header lines ("PHẦN II. CÂU TRẮC NGHIỆM...", "PHẦN III. CÂU TRẮC NGHIỆM...")
+    body = body
+      .replace(/(?:^|\n)\s*PHẦN\s+(?:I|II|III|1|2|3)\b[^\n]*$/gi, '')
+      .replace(/(?:^|\n)\s*[123]\.\s*PHẦN\s+(?:I|II|III)\b[\s\S]*$/gi, '')
+      .trim();
+    if (body) {
+      detailedBlocksByNum[qNum] = body;
+    }
+  }
+
+  const matchedQuestions = new Set<string>();
+
+  // 3. Synchronize Part I questions (Questions 1 .. p1Len)
+  const updatedPart1: Part1Question[] = baseExam.part1.map((q, idx) => {
+    const globalNum = idx + 1;
+    const rawBlock = detailedBlocksByNum[globalNum] || '';
+    let resolvedLetter: 'A' | 'B' | 'C' | 'D' | undefined = quickPart1Answers[globalNum];
+
+    if (rawBlock) {
+      const headerAnsMatch = rawBlock.match(
+        /^(?:Chọn\s+đáp\s+án|Đáp\s+án(?:\s+đúng)?|ĐA)\s*[:=]?\s*([A-D])\b/i
+      );
+      if (headerAnsMatch) {
+        resolvedLetter = headerAnsMatch[1].toUpperCase() as 'A' | 'B' | 'C' | 'D';
+      }
+    }
+
+    let cleanExplanation = '';
+    if (rawBlock) {
+      cleanExplanation = rawBlock
+        .replace(/^(?:Chọn\s+đáp\s+án|Đáp\s+án(?:\s+đúng)?|ĐA)\s*[:=]?\s*[A-D]\s*[.:]?\s*/i, '')
+        .replace(/^(?:Lời\s+giải(?:\s+chi\s+tiết)?|Hướng\s+dẫn\s+giải)\s*[:.-]?\s*/i, '')
+        .replace(/\s*\n\s*/g, ' ')
+        .trim();
+    }
+
+    const finalIdx =
+      resolvedLetter && letterToIdx[resolvedLetter] !== undefined
+        ? letterToIdx[resolvedLetter]
+        : q.correctIndex;
+    const finalLetter = idxToLetter[finalIdx] || 'A';
+
+    if (resolvedLetter || cleanExplanation) {
+      matchedQuestions.add(`P1-${globalNum}`);
+    }
+
+    const finalExplanation = cleanExplanation
+      ? `Chọn đáp án ${finalLetter}. ${cleanExplanation}`
+      : resolvedLetter
+      ? `Đáp án đúng: ${finalLetter}.`
+      : q.explanation;
+
+    return {
+      ...q,
+      correctIndex: finalIdx,
+      correct_answer: finalLetter,
+      explanation: finalExplanation,
+    };
+  });
+
+  // 4. Synchronize Part II questions (Questions p1Len + 1 .. p1Len + p2Len)
+  const updatedPart2: Part2Question[] = baseExam.part2.map((q, idx) => {
+    const globalNum = p1Len + idx + 1;
+    const partLocalNum = idx + 1;
+    const rawBlock = detailedBlocksByNum[globalNum] || detailedBlocksByNum[partLocalNum] || '';
+    const tableTruths = quickPart2Answers[globalNum] || quickPart2Answers[partLocalNum];
+
+    const truthById: Record<'a' | 'b' | 'c' | 'd', boolean | undefined> = {
+      a: tableTruths?.a,
+      b: tableTruths?.b,
+      c: tableTruths?.c,
+      d: tableTruths?.d,
+    };
+
+    const explanationById: Record<'a' | 'b' | 'c' | 'd', string> = {
+      a: '',
+      b: '',
+      c: '',
+      d: '',
+    };
+
+    if (rawBlock) {
+      // Parse header summary line: "Đáp án: a) - Đúng, b) - Đúng, c) - Sai, d) - Sai."
+      const headerPairs = rawBlock.matchAll(
+        /\b([a-d])\)\s*[-–:]?\s*(Đúng|Sai|Đ|S)\b/gi
+      );
+      for (const hp of headerPairs) {
+        const sId = hp[1].toLowerCase() as 'a' | 'b' | 'c' | 'd';
+        truthById[sId] = /^Đ/i.test(hp[2]);
+      }
+
+      // Parse per-statement explanation blocks: "Ý a) [ĐÚNG]: ..."
+      const stmtSolRegex =
+        /(?:^|\n)\s*(?:[•*-]\s*)?(?:Ý\s*)?([a-d])\)\s*(?:\[\s*(ĐÚNG|SAI|Đúng|Sai|Đ|S)\s*\])?\s*[:.-]?\s*([\s\S]*?)(?=(?:\n\s*(?:[•*-]\s*)?(?:Ý\s*)?[a-d]\)\s*(?:\[|[:.-]|\s))|$)/gi;
+      let sm: RegExpExecArray | null;
+      while ((sm = stmtSolRegex.exec(rawBlock)) !== null) {
+        const sId = sm[1].toLowerCase() as 'a' | 'b' | 'c' | 'd';
+        const bracketTag = sm[2];
+        const rawExp = (sm[3] || '').replace(/\s*\n\s*/g, ' ').trim();
+        if (bracketTag) {
+          truthById[sId] = /^Đ/i.test(bracketTag);
+        }
+        // Avoid matching the short header line "a) - Đúng, b) - Đúng..." as the body explanation
+        if (rawExp && !/^[-\s]*(?:Đúng|Sai)\s*[,;]\s*[b-d]\)/i.test(rawExp)) {
+          explanationById[sId] = rawExp;
+        }
+      }
+    }
+
+    let anyUpdated = false;
+    const updatedStatements = q.statements.map((stmt) => {
+      const sId = stmt.id.toLowerCase() as 'a' | 'b' | 'c' | 'd';
+      const newTruth = truthById[sId] !== undefined ? Boolean(truthById[sId]) : stmt.isTrue;
+      const newStmtExp = explanationById[sId] || stmt.explanation;
+      if (truthById[sId] !== undefined || explanationById[sId]) {
+        anyUpdated = true;
+      }
+      return {
+        ...stmt,
+        isTrue: newTruth,
+        is_correct: newTruth,
+        explanation: newStmtExp,
+      };
+    }) as [Part2SubStatement, Part2SubStatement, Part2SubStatement, Part2SubStatement];
+
+    if (anyUpdated) {
+      matchedQuestions.add(`P2-${globalNum}`);
+    }
+
+    const summaryHeader = `Đáp án chuẩn: ${updatedStatements
+      .map((s) => `${s.id}) ${s.isTrue ? 'Đúng' : 'Sai'}`)
+      .join(' · ')}.`;
+
+    const detailedLines = updatedStatements
+      .filter((s) => Boolean(s.explanation))
+      .map(
+        (s) =>
+          `• Ý ${s.id}) [${s.isTrue ? 'ĐÚNG' : 'SAI'}]: ${s.explanation}`
+      );
+
+    const combinedExplanation =
+      detailedLines.length > 0
+        ? `${summaryHeader}\n${detailedLines.join('\n')}`
+        : anyUpdated
+        ? summaryHeader
+        : q.explanation;
+
+    return {
+      ...q,
+      statements: updatedStatements,
+      explanation: combinedExplanation,
+    };
+  });
+
+  // 5. Synchronize Part III questions (Questions p1Len + p2Len + 1 .. p1Len + p2Len + p3Len)
+  const updatedPart3: Part3Question[] = baseExam.part3.map((q, idx) => {
+    const globalNum = p1Len + p2Len + idx + 1;
+    const partLocalNum = idx + 1;
+    const rawBlock = detailedBlocksByNum[globalNum] || detailedBlocksByNum[partLocalNum] || '';
+    let resolvedAnswer = quickPart3Answers[globalNum] || quickPart3Answers[partLocalNum];
+    let resolvedUnit = q.unit;
+
+    if (rawBlock) {
+      const ansMatch = rawBlock.match(
+        /^(?:Đáp\s+(?:án|số)|Kết\s+quả|ĐA|ĐS)\s*[:=]?\s*([+-]?\d+(?:[.,]\d+)?)\s*(?:\(\s*([^)]+)\s*\))?/i
+      );
+      if (ansMatch) {
+        resolvedAnswer = ansMatch[1].trim();
+        if (ansMatch[2]) {
+          resolvedUnit = ansMatch[2].trim();
+        }
+      }
+    }
+
+    let cleanExplanation = '';
+    if (rawBlock) {
+      cleanExplanation = rawBlock
+        .replace(
+          /^(?:Đáp\s+(?:án|số)|Kết\s+quả|ĐA|ĐS)\s*[:=]?\s*[+-]?\d+(?:[.,]\d+)?\s*(?:\(\s*[^)]+\s*\))?\s*[.:]?\s*/i,
+          ''
+        )
+        .replace(/^(?:Lời\s+giải(?:\s+chi\s+tiết)?|Hướng\s+dẫn\s+giải)\s*[:.-]?\s*/i, '')
+        .replace(/\s*\n\s*/g, ' ')
+        .trim();
+    }
+
+    if (resolvedAnswer || cleanExplanation) {
+      matchedQuestions.add(`P3-${globalNum}`);
+    }
+
+    const finalAnswer = resolvedAnswer || q.answer;
+    const finalExplanation = cleanExplanation
+      ? `Đáp án: ${finalAnswer}${resolvedUnit ? ` (${resolvedUnit})` : ''}. ${cleanExplanation}`
+      : resolvedAnswer
+      ? `Đáp án: ${finalAnswer}${resolvedUnit ? ` (${resolvedUnit})` : ''}.`
+      : q.explanation;
+
+    return {
+      ...q,
+      answer: finalAnswer,
+      correct_value: finalAnswer,
+      unit: resolvedUnit,
+      explanation: finalExplanation,
+    };
+  });
+
+  // Build a clean, human-readable formatted solution summary for the teacher preview & student review
+  const summaryLines: string[] = [];
+  updatedPart1.forEach((q, idx) => {
+    summaryLines.push(`Câu ${idx + 1}: ${q.explanation}`);
+  });
+  updatedPart2.forEach((q, idx) => {
+    summaryLines.push(`Câu ${p1Len + idx + 1}: ${q.explanation}`);
+  });
+  updatedPart3.forEach((q, idx) => {
+    summaryLines.push(`Câu ${p1Len + p2Len + idx + 1}: ${q.explanation}`);
+  });
+
+  return {
+    mergedExam: {
+      ...baseExam,
+      part1: updatedPart1,
+      part2: updatedPart2,
+      part3: updatedPart3,
+    },
+    formattedSolutionSummary: summaryLines.join('\n\n'),
+    matchedQuestionCount: matchedQuestions.size,
   };
 }
 
@@ -2723,7 +3972,38 @@ export async function parseUploadedExamFile(file: File): Promise<ParsedExamUploa
     }
   }
 
-  // 2. .docx (Office Open XML ZIP)
+  // 2. .pdf (Portable Document Format with ToUnicode CMap & embedded Image XObjects)
+  if (lowerName.endsWith('.pdf')) {
+    try {
+      const buffer = await file.arrayBuffer();
+      const extractedText = await extractTextAndImagesFromPdfBuffer(buffer, true);
+      if (extractedText.trim().length > 20) {
+        const res = parseAnnotatedTextToExamData(extractedText, file.name);
+        if (res.parsedCount > 0) {
+          return {
+            examData: {
+              ...res.examData,
+              title: res.adminHeader.examTerm || cleanTitleFromFileName || res.examData.title,
+            },
+            adminHeader: {
+              ...res.adminHeader,
+              examTerm: res.adminHeader.examTerm || cleanTitleFromFileName,
+            },
+            questionCount: res.parsedCount,
+            part1Count: res.part1Count,
+            part2Count: res.part2Count,
+            part3Count: res.part3Count,
+            imageCount: res.imageCount,
+            sourceType: 'docx',
+          };
+        }
+      }
+    } catch {
+      // Fall through to fallback dataset if scanned image PDF without text layer
+    }
+  }
+
+  // 3. .docx (Office Open XML ZIP)
   if (lowerName.endsWith('.docx')) {
     try {
       const buffer = await file.arrayBuffer();
@@ -2754,7 +4034,7 @@ export async function parseUploadedExamFile(file: File): Promise<ParsedExamUploa
     }
   }
 
-  // 3. .doc (HTML or plain text) or .txt
+  // 4. .doc (HTML or plain text) or .txt
   if (lowerName.endsWith('.doc') || lowerName.endsWith('.txt')) {
     try {
       const rawText = await file.text();
@@ -2785,8 +4065,7 @@ export async function parseUploadedExamFile(file: File): Promise<ParsedExamUploa
     }
   }
 
-  // 4. Fallback for PDF or scanned files:
-  // Check if the filename indicates the 18-question entrance test ("ĐẦU VÀO" / "DAU VAO") vs the 28-question standard template
+  // 5. Fallback for scanned image files without text layer:
   const is18Entrance = /ĐẦU\s*VÀO|DAU[\s_]*VAO/i.test(cleanTitleFromFileName);
   const templateDataset = is18Entrance ? MECHANICS_ENTRANCE_18_EXAM : ENTRANCE_PHYSICS_28_EXAM;
 

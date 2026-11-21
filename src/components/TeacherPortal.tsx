@@ -47,6 +47,7 @@ import {
   buildSampleWordTemplateText,
   buildTNMakerCsvContent,
   buildTNMakerExcelHtml,
+  buildTNMakerXlsxBytes,
   buildVariantsWordDocHtml,
   buildVariantsWordDocxBlob,
   downloadComprehensiveExamZipPackage,
@@ -58,7 +59,9 @@ import {
 import { ScramblerGenerationOptions } from '../utils/scramblerAndGrader';
 import {
   ENTRANCE_PHYSICS_28_EXAM,
+  extractRawTextFromUploadedDocument,
   getResolvedQuestionImage,
+  parseAndMergeDetailedSolutionDocument,
   parseUploadedExamFile,
 } from '../utils/examDocumentParser';
 
@@ -285,6 +288,8 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
   const [onlineUploadedExamFileName, setOnlineUploadedExamFileName] = useState<string | null>(null);
   const [onlineSolutionFileName, setOnlineSolutionFileName] = useState<string | null>(null);
   const [onlineSolutionText, setOnlineSolutionText] = useState<string>('');
+  const [onlineRawSolutionDocText, setOnlineRawSolutionDocText] = useState<string>('');
+  const [onlineSyncedSolutionCount, setOnlineSyncedSolutionCount] = useState<number>(0);
 
   // Bước 2: Cấu hình kỳ thi
   const [onlineConfigTitle, setOnlineConfigTitle] = useState<string>(
@@ -336,7 +341,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
   const [scramblerWizardStep, setScramblerWizardStep] = useState<1 | 2 | 3 | 4>(1);
   const [scramblerCompletedZipName, setScramblerCompletedZipName] = useState<string | null>(null);
   const [showScramblerConfig, setShowScramblerConfig] = useState<boolean>(true);
-  const [governingBody, setGoverningBody] = useState<string>('SỞ GIÁO DỤC VÀ ĐÀO TẠO TP ĐÀ NẴNG');
+  const [governingBody, setGoverningBody] = useState<string>('SỞ GD & ĐT TP ĐÀ NẴNG');
   const [schoolName, setSchoolName] = useState<string>('THPT HÙNG VƯƠNG');
   const [examTerm, setExamTerm] = useState<string>('KIỂM TRA GIỮA HỌC KỲ I');
   const [subjectName, setSubjectName] = useState<string>('VẬT LÝ 12');
@@ -461,7 +466,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       const nextGov =
         parsedResult.adminHeader?.governingBody ||
         governingBody ||
-        'SỞ GIÁO DỤC VÀ ĐÀO TẠO TP ĐÀ NẴNG';
+        'SỞ GD & ĐT TP ĐÀ NẴNG';
       const nextSchool =
         parsedResult.adminHeader?.schoolName || schoolName || 'THPT HÙNG VƯƠNG';
       const nextTerm =
@@ -608,6 +613,20 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
   const handleExportTNMakerExcel = (overrideVariants?: ScrambledExamVariant[]) => {
     const activeVariants = Array.isArray(overrideVariants) ? overrideVariants : scrambledExams;
     const subjectSlug = toCleanSlug(subjectName || 'VatLy12') || 'VatLy12';
+
+    // Download native OpenXML .xlsx file matching (Mẫu) TNMaker-2025
+    const xlsxBytes = buildTNMakerXlsxBytes(activeVariants);
+    const xlsxBlob = new Blob([xlsxBytes.buffer as ArrayBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const xlsxUrl = URL.createObjectURL(xlsxBlob);
+    const aXlsx = document.createElement('a');
+    aXlsx.href = xlsxUrl;
+    aXlsx.download = `Dap_An_TNMaker_${subjectSlug}_${activeVariants.length}MaDe.xlsx`;
+    aXlsx.click();
+    URL.revokeObjectURL(xlsxUrl);
+
+    // Also provide .xls in the exact same TNMaker-2025 matrix format
     const xlsHtml = buildTNMakerExcelHtml(activeVariants, exportMeta);
     const blob = new Blob([xlsHtml], { type: 'application/vnd.ms-excel;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -628,9 +647,9 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     URL.revokeObjectURL(csvUrl);
 
     setScramblerFeedback(
-      `Đã xuất bộ file chấm máy TNMaker / QM (.xls và .csv) cho ${activeVariants.length} mã đề (${activeVariants
+      `Đã xuất file đáp án chấm máy chuẩn TNMaker-2025 (.xlsx, .xls và .csv) cho ${activeVariants.length} mã đề (${activeVariants
         .map((v) => v.code)
-        .join(', ')}) với cột chuẩn [Mã Đề, Câu, Đáp Án, Điểm].`
+        .join(', ')}).`
     );
     window.setTimeout(() => setScramblerFeedback(null), 5500);
   };
@@ -660,7 +679,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     headerOverrides?: Partial<import('../types/exam').ScrambledVariantAdminHeader>,
     shouldScrollToPreview = false
   ) => {
-    const nextGov = headerOverrides?.governingBody || governingBody || 'SỞ GIÁO DỤC VÀ ĐÀO TẠO TP ĐÀ NẴNG';
+    const nextGov = headerOverrides?.governingBody || governingBody || 'SỞ GD & ĐT TP ĐÀ NẴNG';
     const nextSchool = headerOverrides?.schoolName || schoolName || 'THPT HÙNG VƯƠNG';
     const nextTerm =
       headerOverrides?.examTerm || nextExam.title || examTerm || 'KIỂM TRA GIỮA HỌC KỲ I';
@@ -1234,7 +1253,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       cleanedCodes.length > 0 ? cleanedCodes : ['1102', '1104', '1106', '1108'];
 
     const adminHeader = {
-      governingBody: governingBody.trim() || 'SỞ GIÁO DỤC VÀ ĐÀO TẠO TP ĐÀ NẴNG',
+      governingBody: governingBody.trim() || 'SỞ GD & ĐT TP ĐÀ NẴNG',
       schoolName: schoolName.trim() || 'THPT HÙNG VƯƠNG',
       examTerm: examTerm.trim() || 'KIỂM TRA GIỮA HỌC KỲ I',
       subjectName: subjectName.trim() || 'VẬT LÝ 12',
@@ -1466,8 +1485,15 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     const level = overridePartial?.violationLevel ?? onlineViolationLevel;
     const maxVio = mode === 'exam' ? getViolationThresholdByLevel(level) : 0;
     const srcMode = overridePartial?.sourceMode ?? onlineSourceMode;
-    const baseExam = overridePartial?.examData ?? onlineSelectedExamData;
+    const baseExamRaw = overridePartial?.examData ?? onlineSelectedExamData;
     const solContent = overridePartial?.detailedSolutionContent ?? onlineSolutionText;
+    const rawSolToMerge =
+      overridePartial?.detailedSolutionContent ??
+      (onlineRawSolutionDocText.trim() || onlineSolutionText);
+    const baseExam =
+      srcMode === 'upload_with_solution' && rawSolToMerge.trim()
+        ? parseAndMergeDetailedSolutionDocument(rawSolToMerge, baseExamRaw).mergedExam
+        : baseExamRaw;
     const solFileName =
       overridePartial?.detailedSolutionFileName !== undefined
         ? overridePartial.detailedSolutionFileName || undefined
@@ -1548,12 +1574,25 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       const detectedDuration =
         parsed.adminHeader?.durationMinutes || parsed.examData.durationMinutes || 50;
 
-      const updatedExam: ExamData = {
+      let updatedExam: ExamData = {
         ...parsed.examData,
         title: detectedTitle,
         subject: detectedSubject,
         durationMinutes: detectedDuration,
       };
+
+      // If Phần B (Detailed Solutions & Answer Key) was already uploaded or entered, automatically re-merge it into the newly parsed Phần A exam
+      const pendingSolutionSource = onlineRawSolutionDocText.trim() || onlineSolutionText.trim();
+      let syncedCount = 0;
+      if (pendingSolutionSource) {
+        const mergedRes = parseAndMergeDetailedSolutionDocument(pendingSolutionSource, updatedExam);
+        if (mergedRes.matchedQuestionCount > 0) {
+          updatedExam = mergedRes.mergedExam;
+          syncedCount = mergedRes.matchedQuestionCount;
+          setOnlineSyncedSolutionCount(mergedRes.matchedQuestionCount);
+          setOnlineSolutionText(mergedRes.formattedSolutionSummary);
+        }
+      }
 
       setIsScrambling(false);
       setOnlineSelectedExamData(updatedExam);
@@ -1562,10 +1601,27 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       setOnlineDurationMinutes(detectedDuration);
       setOnlineExamMode('practice'); // Chế độ 2 hỗ trợ học sinh xem lời giải chi tiết để ôn tập
       onUpdateExamData(updatedExam);
+
+      if (isOnlinePublished && onSaveOnlineAssignment) {
+        onSaveOnlineAssignment(
+          buildSynchronizedAssignmentPayload({
+            examData: updatedExam,
+            examTitle: detectedTitle,
+            subject: detectedSubject,
+            durationMinutes: detectedDuration,
+            sourceMode: 'upload_with_solution',
+          })
+        );
+      }
+
+      const totalQ =
+        updatedExam.part1.length + updatedExam.part2.length + updatedExam.part3.length;
       setScrambleToastMessage(
-        `Đã nạp đề thi "${file.name}" (${updatedExam.part1.length + updatedExam.part2.length + updatedExam.part3.length} câu) cho Tổ Chức Thi Online!`
+        syncedCount > 0
+          ? `Đã bóc tách Đề thi Phần A "${file.name}" (${totalQ} câu · ${parsed.imageCount} hình vẽ) và đồng bộ ${syncedCount} đáp án + lời giải chi tiết Phần B!`
+          : `Đã bóc tách Đề thi Phần A "${file.name}" (${totalQ} câu: P.I ${updatedExam.part1.length}c · P.II ${updatedExam.part2.length}c · P.III ${updatedExam.part3.length}c · ${parsed.imageCount} hình vẽ)!`
       );
-      window.setTimeout(() => setScrambleToastMessage(null), 4500);
+      window.setTimeout(() => setScrambleToastMessage(null), 5000);
     } catch {
       setIsScrambling(false);
       const fallbackTitle = file.name.replace(/\.(docx|doc|pdf|txt|json)$/i, '');
@@ -1581,45 +1637,15 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
   };
 
   const applyDetailedSolutionsTextToExam = (rawText: string, baseExam: ExamData): ExamData => {
-    const lines = rawText
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-    if (lines.length === 0) return baseExam;
-
-    // Parse lines like "Câu 1: ..." or "Phần I Câu 1: ..." or distribute sequentially
-    const numberedMap: Record<number, string> = {};
-    lines.forEach((line) => {
-      const m = line.match(/^(?:Câu|Cau|Bài|Bai)\s*(\d+)\s*[:.-]\s*(.+)$/i);
-      if (m) {
-        numberedMap[Number(m[1])] = m[2].trim();
-      }
-    });
-
-    const nextPart1 = baseExam.part1.map((q, idx) => {
-      const qNum = idx + 1;
-      const customExp = numberedMap[qNum];
-      return customExp ? { ...q, explanation: customExp } : q;
-    });
-
-    const nextPart2 = baseExam.part2.map((q, idx) => {
-      const qNum = baseExam.part1.length + idx + 1;
-      const customExp = numberedMap[qNum];
-      return customExp ? { ...q, explanation: customExp } : q;
-    });
-
-    const nextPart3 = baseExam.part3.map((q, idx) => {
-      const qNum = baseExam.part1.length + baseExam.part2.length + idx + 1;
-      const customExp = numberedMap[qNum];
-      return customExp ? { ...q, explanation: customExp } : q;
-    });
-
-    return {
-      ...baseExam,
-      part1: nextPart1,
-      part2: nextPart2,
-      part3: nextPart3,
-    };
+    if (!rawText || !rawText.trim()) return baseExam;
+    const { mergedExam, matchedQuestionCount } = parseAndMergeDetailedSolutionDocument(
+      rawText,
+      baseExam
+    );
+    if (matchedQuestionCount > 0) {
+      setOnlineSyncedSolutionCount(matchedQuestionCount);
+    }
+    return mergedExam;
   };
 
   const handleUploadDetailedSolutionFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1628,23 +1654,63 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     e.target.value = '';
 
     setOnlineSolutionFileName(file.name);
+    setOnlineSourceMode('upload_with_solution');
     try {
-      const rawText = await file.text();
-      const cleanedText =
-        rawText && !rawText.includes('\u0000')
-          ? rawText.slice(0, 12000)
-          : `Tài liệu lời giải chi tiết đính kèm từ file: ${file.name}.\n` +
-            onlineSelectedExamData.part1
-              .map((q, idx) => `Câu ${idx + 1}: ${q.explanation}`)
-              .join('\n');
-      setOnlineSolutionText(cleanedText);
-      const mergedExam = applyDetailedSolutionsTextToExam(cleanedText, onlineSelectedExamData);
-      setOnlineSelectedExamData(mergedExam);
-      onUpdateExamData(mergedExam);
-      setScrambleToastMessage(
-        `Đã tích hợp file Lời giải chi tiết "${file.name}" vào đề thi để học sinh xem lại khi ôn tập!`
-      );
-      window.setTimeout(() => setScrambleToastMessage(null), 4500);
+      const extractedText = await extractRawTextFromUploadedDocument(file);
+      const validText =
+        extractedText && !extractedText.includes('\u0000') && extractedText.trim().length > 10
+          ? extractedText
+          : '';
+
+      if (validText) {
+        setOnlineRawSolutionDocText(validText);
+        const {
+          mergedExam,
+          formattedSolutionSummary,
+          matchedQuestionCount,
+        } = parseAndMergeDetailedSolutionDocument(validText, onlineSelectedExamData);
+
+        const displaySummary =
+          matchedQuestionCount > 0 ? formattedSolutionSummary : validText.slice(0, 20000);
+
+        setOnlineSyncedSolutionCount(matchedQuestionCount);
+        setOnlineSolutionText(displaySummary);
+        setOnlineSelectedExamData(mergedExam);
+        setOnlineExamMode('practice');
+        onUpdateExamData(mergedExam);
+
+        if (isOnlinePublished && onSaveOnlineAssignment) {
+          onSaveOnlineAssignment(
+            buildSynchronizedAssignmentPayload({
+              examData: mergedExam,
+              detailedSolutionContent: displaySummary,
+              detailedSolutionFileName: file.name,
+              sourceMode: 'upload_with_solution',
+            })
+          );
+        }
+
+        const totalQ =
+          mergedExam.part1.length + mergedExam.part2.length + mergedExam.part3.length;
+        setScrambleToastMessage(
+          `Đã bóc tách & đồng bộ Đáp án + Lời giải chi tiết Phần B "${file.name}" (${matchedQuestionCount}/${totalQ} câu hỏi) vào hệ thống!`
+        );
+        window.setTimeout(() => setScrambleToastMessage(null), 5000);
+      } else {
+        const fallbackSummary = [
+          ...onlineSelectedExamData.part1.map((q, idx) => `Câu ${idx + 1}: ${q.explanation}`),
+          ...onlineSelectedExamData.part2.map(
+            (q, idx) => `Câu ${onlineSelectedExamData.part1.length + idx + 1}: ${q.explanation}`
+          ),
+          ...onlineSelectedExamData.part3.map(
+            (q, idx) =>
+              `Câu ${
+                onlineSelectedExamData.part1.length + onlineSelectedExamData.part2.length + idx + 1
+              }: ${q.explanation}`
+          ),
+        ].join('\n\n');
+        setOnlineSolutionText(fallbackSummary);
+      }
     } catch {
       const fallbackSummary = onlineSelectedExamData.part1
         .map((q, idx) => `Câu ${idx + 1}: ${q.explanation}`)
@@ -1718,6 +1784,8 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
 
   const handlePublishAndSyncOnlineExam = () => {
     const payload = buildSynchronizedAssignmentPayload();
+    setOnlineSelectedExamData(payload.examData);
+    onUpdateExamData(payload.examData);
     if (onSaveOnlineAssignment) {
       onSaveOnlineAssignment(payload);
     }
@@ -4167,7 +4235,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                           value={governingBody}
                           onChange={(e) => setGoverningBody(e.target.value)}
                           className="w-full px-3.5 py-2 text-sm bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-violet-500"
-                          placeholder="SỞ GIÁO DỤC VÀ ĐÀO TẠO TP ĐÀ NẴNG"
+                          placeholder="SỞ GD & ĐT TP ĐÀ NẴNG"
                         />
                       </div>
                     </div>
@@ -5299,6 +5367,26 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                             className="hidden"
                           />
                         </label>
+
+                        {onlineUploadedExamFileName && (
+                          <div className="p-3 rounded-xl bg-violet-950/50 border border-violet-600/50 text-xs text-violet-200 flex items-center justify-between gap-2">
+                            <span className="font-semibold truncate">
+                              ✓ Đã bóc tách Phần A: {onlineSelectedExamData.part1.length} câu P.I ·{' '}
+                              {onlineSelectedExamData.part2.length} câu P.II ·{' '}
+                              {onlineSelectedExamData.part3.length} câu P.III
+                            </span>
+                            <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-violet-900/80 text-violet-200 shrink-0">
+                              {
+                                [
+                                  ...onlineSelectedExamData.part1.filter((q) => q.has_image),
+                                  ...onlineSelectedExamData.part2.filter((q) => q.has_image),
+                                  ...onlineSelectedExamData.part3.filter((q) => q.has_image),
+                                ].length
+                              }{' '}
+                              hình vẽ
+                            </span>
+                          </div>
+                        )}
                       </div>
 
                       {/* Box 2: Upload Detailed Solution File */}
@@ -5323,7 +5411,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                               : 'Bấm để tải File Lời Giải Chi Tiết từ máy tính'}
                           </div>
                           <div className="text-[11px] text-slate-400 font-mono">
-                            Tự động đồng bộ lời giải vào từng câu hỏi (Câu 1: ..., Câu 2: ...)
+                            Tự động đồng bộ Bảng đáp án &amp; Lời giải vào từng câu hỏi (Phần I, II, III)
                           </div>
                           <input
                             type="file"
@@ -5332,6 +5420,25 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                             className="hidden"
                           />
                         </label>
+
+                        {(onlineSolutionFileName || onlineSyncedSolutionCount > 0) && (
+                          <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-600/50 text-xs text-emerald-200 flex items-center justify-between gap-2">
+                            <span className="font-semibold truncate">
+                              ✓ Đã đồng bộ Đáp án &amp; Lời giải chi tiết Phần B vào hệ thống
+                            </span>
+                            <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-emerald-900/80 text-emerald-200 shrink-0">
+                              {onlineSyncedSolutionCount ||
+                                onlineSelectedExamData.part1.length +
+                                  onlineSelectedExamData.part2.length +
+                                  onlineSelectedExamData.part3.length}
+                              /
+                              {onlineSelectedExamData.part1.length +
+                                onlineSelectedExamData.part2.length +
+                                onlineSelectedExamData.part3.length}{' '}
+                              câu
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -5339,7 +5446,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                     <div className="space-y-2">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <label className="text-xs sm:text-sm font-bold text-emerald-300">
-                          Nội dung Lời Giải Chi Tiết & Hướng Dẫn Ôn Tập (Học sinh xem lại sau khi nộp bài):
+                          Nội dung Lời Giải Chi Tiết &amp; Hướng Dẫn Ôn Tập (Học sinh xem lại sau khi nộp bài):
                         </label>
                         <button
                           type="button"
@@ -5373,14 +5480,17 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                         rows={5}
                         value={onlineSolutionText}
                         onChange={(e) => {
-                          setOnlineSolutionText(e.target.value);
+                          const val = e.target.value;
+                          setOnlineSolutionText(val);
+                          setOnlineRawSolutionDocText(val);
                           const updated = applyDetailedSolutionsTextToExam(
-                            e.target.value,
+                            val,
                             onlineSelectedExamData
                           );
                           setOnlineSelectedExamData(updated);
+                          onUpdateExamData(updated);
                         }}
-                        placeholder="Nhập hoặc dán lời giải chi tiết (Ví dụ: Câu 1: Áp dụng định luật I nhiệt động lực học...&#10;Câu 2: ...) để học sinh đối chiếu ôn tập sau khi làm bài."
+                        placeholder="Nhập hoặc dán lời giải chi tiết (Ví dụ: Câu 1: Chọn đáp án B. Lời giải chi tiết: ...&#10;Câu 19: Đáp án: a) - Đúng, b) - Đúng...) để học sinh đối chiếu ôn tập sau khi làm bài."
                         className="w-full p-3.5 rounded-xl bg-slate-900 border border-slate-700 text-xs sm:text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500"
                       />
                     </div>

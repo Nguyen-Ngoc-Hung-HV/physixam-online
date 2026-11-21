@@ -123,6 +123,44 @@ function shuffleQuestionsWithClusters<T extends { question?: string; topic?: str
   return shuffledBlocks.flat();
 }
 
+function syncPart1ExplanationWithAnswerLetter(
+  rawExplanation: string,
+  targetLetter: 'A' | 'B' | 'C' | 'D'
+): string {
+  if (!rawExplanation) return `Đáp án đúng: ${targetLetter}.`;
+  return rawExplanation
+    .replace(/^(Chọn\s+đáp\s+án\s*[:=]?\s*)[A-D]\b/i, `$1${targetLetter}`)
+    .replace(/^(Đáp\s+án(?:\s+đúng)?\s*[:=]?\s*)[A-D]\b/i, `$1${targetLetter}`);
+}
+
+function buildPart2CombinedExplanationFromStatements(
+  statements: readonly {
+    id: string;
+    displayLabel?: string;
+    isTrue: boolean;
+    explanation?: string;
+  }[],
+  fallbackExplanation: string
+): string {
+  const anySubExp = statements.some((s) => Boolean(s.explanation && s.explanation.trim()));
+  const summaryHeader = `Đáp án chuẩn: ${statements
+    .map((s) => `${s.displayLabel || s.id}) ${s.isTrue ? 'Đúng' : 'Sai'}`)
+    .join(' · ')}.`;
+  if (!anySubExp) {
+    if (/^Đáp\s+án\s+chuẩn\s*:/i.test(fallbackExplanation || '')) {
+      return summaryHeader;
+    }
+    return fallbackExplanation || summaryHeader;
+  }
+  const lines = statements
+    .filter((s) => Boolean(s.explanation && s.explanation.trim()))
+    .map(
+      (s) =>
+        `• Ý ${s.displayLabel || s.id}) [${s.isTrue ? 'ĐÚNG' : 'SAI'}]: ${(s.explanation || '').trim()}`
+    );
+  return `${summaryHeader}\n${lines.join('\n')}`;
+}
+
 export function generateScrambledVariant(
   exam: ExamData,
   code: string,
@@ -162,6 +200,7 @@ export function generateScrambledVariant(
       (o) => o.originalIndex === (resolvedOriginalCorrect >= 0 ? resolvedOriginalCorrect : 0)
     );
     const safeCorrectIdx = newCorrectIndex >= 0 ? newCorrectIndex : 0;
+    const targetLetter = optionLetterMap[safeCorrectIdx];
 
     const resolvedImageUrl = getResolvedQuestionImage(item, 'I', originalIndex + 1);
     const cleanQuestionText = item.question.replace(/@@IMAGE_TOKEN:[\s\S]*?@@/g, '').trim();
@@ -171,7 +210,8 @@ export function generateScrambledVariant(
       question: cleanQuestionText,
       options: newOptions,
       correctIndex: safeCorrectIdx,
-      correct_answer: optionLetterMap[safeCorrectIdx],
+      correct_answer: targetLetter,
+      explanation: syncPart1ExplanationWithAnswerLetter(item.explanation, targetLetter),
       originalQuestionNumber: originalIndex + 1,
       displayNumber: displayIdx + 1,
       optionPermutation: shuffledOptions.map((o) => o.originalIndex),
@@ -211,6 +251,7 @@ export function generateScrambledVariant(
       originalQuestionNumber: originalIndex + 1,
       displayNumber: restartIndexPerPart ? displayIdx + 1 : part1.length + displayIdx + 1,
       statements: newStatements,
+      explanation: buildPart2CombinedExplanationFromStatements(newStatements, item.explanation),
       has_image: Boolean(resolvedImageUrl),
       image_url: resolvedImageUrl,
     };
@@ -294,6 +335,7 @@ export function shuffleVariantForStudent(
     ];
     const nextCorrectIdx = wrappedOpts.findIndex((o) => o.originalIndex === currentCorrectIdx);
     const safeCorrectIdx = nextCorrectIdx >= 0 ? nextCorrectIdx : 0;
+    const targetLetter = optionLetters[safeCorrectIdx];
     const prevPerm = item.optionPermutation || [0, 1, 2, 3];
     const nextPerm = wrappedOpts.map((o) => prevPerm[o.originalIndex] ?? o.originalIndex);
 
@@ -302,7 +344,8 @@ export function shuffleVariantForStudent(
       displayNumber: displayIdx + 1,
       options: nextOptions,
       correctIndex: safeCorrectIdx,
-      correct_answer: optionLetters[safeCorrectIdx],
+      correct_answer: targetLetter,
+      explanation: syncPart1ExplanationWithAnswerLetter(item.explanation, targetLetter),
       optionPermutation: nextPerm,
     };
   });
@@ -334,6 +377,7 @@ export function shuffleVariantForStudent(
       ...item,
       displayNumber: displayIdx + 1,
       statements: nextStatements,
+      explanation: buildPart2CombinedExplanationFromStatements(nextStatements, item.explanation),
     };
   });
 
@@ -372,6 +416,7 @@ export function restoreUnshuffledVariant(
           ? optionLetters.indexOf(item.correct_answer)
           : 0;
       const safeCorrect = resolvedCorrect >= 0 ? resolvedCorrect : 0;
+      const targetLetter = optionLetters[safeCorrect];
       const resolvedImageUrl = getResolvedQuestionImage(item, 'I', idx + 1);
       const cleanQuestionText = item.question.replace(/@@IMAGE_TOKEN:[\s\S]*?@@/g, '').trim();
       return {
@@ -379,7 +424,8 @@ export function restoreUnshuffledVariant(
         question: cleanQuestionText,
         options: [...item.options] as [string, string, string, string],
         correctIndex: safeCorrect,
-        correct_answer: optionLetters[safeCorrect],
+        correct_answer: targetLetter,
+        explanation: syncPart1ExplanationWithAnswerLetter(item.explanation, targetLetter),
         originalQuestionNumber: idx + 1,
         displayNumber: idx + 1,
         optionPermutation: [0, 1, 2, 3],
@@ -414,6 +460,7 @@ export function restoreUnshuffledVariant(
         originalQuestionNumber: idx + 1,
         displayNumber: idx + 1,
         statements,
+        explanation: buildPart2CombinedExplanationFromStatements(statements, item.explanation),
         has_image: Boolean(resolvedImageUrl),
         image_url: resolvedImageUrl,
       };
@@ -458,12 +505,14 @@ export function restoreUnshuffledVariant(
             }
           }
         });
+        const targetLetter = optionLetters[restoredCorrect];
         return {
           ...q,
           displayNumber: idx + 1,
           options: restoredOpts,
           correctIndex: restoredCorrect,
-          correct_answer: optionLetters[restoredCorrect],
+          correct_answer: targetLetter,
+          explanation: syncPart1ExplanationWithAnswerLetter(q.explanation, targetLetter),
           optionPermutation: [0, 1, 2, 3],
         };
       }
@@ -493,6 +542,7 @@ export function restoreUnshuffledVariant(
         ...q,
         displayNumber: idx + 1,
         statements: sortedStmts,
+        explanation: buildPart2CombinedExplanationFromStatements(sortedStmts, q.explanation),
       };
     });
 
@@ -638,6 +688,7 @@ export function gradeStudentExam(
         userChoice,
         correctChoice: stmt.isTrue,
         isCorrect: isSubCorrect,
+        explanation: stmt.explanation,
       };
     });
 
