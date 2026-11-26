@@ -42,6 +42,7 @@ import {
 } from '../types/exam';
 import { COMPACT_8_PHYSICS_EXAM, FULL_MOET_28_PHYSICS_EXAM } from '../data/seedPhysicsExam';
 import { MathText } from './MathText';
+import { HelpTooltip } from './HelpTooltip';
 import {
   buildMasterAnswerKeyWordHtml,
   buildSampleWordTemplateText,
@@ -280,23 +281,36 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
   // =========================================================================
   // TAB 4 (TỔ CHỨC THI ONLINE): 3 BƯỚC (CHỌN ĐỀ -> CẤU HÌNH KỲ THI -> GIAO BÀI)
   // =========================================================================
+  const primaryOnlineAssign = onlineAssignments[0];
   const [onlineOrgStep, setOnlineOrgStep] = useState<1 | 2 | 3>(1);
-  const [onlineSourceMode, setOnlineSourceMode] = useState<'bank' | 'upload_with_solution'>('bank');
+  const [onlineSourceMode, setOnlineSourceMode] = useState<'bank' | 'upload_with_solution'>(
+    primaryOnlineAssign?.sourceMode || 'bank'
+  );
   const [onlineBankFolderFilter, setOnlineBankFolderFilter] = useState<string>('ALL');
-  const [selectedOnlineBankId, setSelectedOnlineBankId] = useState<string>('BANK-SEED-TN-01');
-  const [onlineSelectedExamData, setOnlineSelectedExamData] = useState<ExamData>(examData);
+  const [selectedOnlineBankId, setSelectedOnlineBankId] = useState<string>(
+    primaryOnlineAssign?.sourceBankExamId || 'BANK-SEED-TN-01'
+  );
+  const [onlineSelectedExamData, setOnlineSelectedExamData] = useState<ExamData>(
+    primaryOnlineAssign?.examData || examData
+  );
   const [onlineUploadedExamFileName, setOnlineUploadedExamFileName] = useState<string | null>(null);
-  const [onlineSolutionFileName, setOnlineSolutionFileName] = useState<string | null>(null);
-  const [onlineSolutionText, setOnlineSolutionText] = useState<string>('');
-  const [onlineRawSolutionDocText, setOnlineRawSolutionDocText] = useState<string>('');
+  const [onlineSolutionFileName, setOnlineSolutionFileName] = useState<string | null>(
+    primaryOnlineAssign?.detailedSolutionFileName || null
+  );
+  const [onlineSolutionText, setOnlineSolutionText] = useState<string>(
+    primaryOnlineAssign?.detailedSolutionContent || ''
+  );
+  const [onlineRawSolutionDocText, setOnlineRawSolutionDocText] = useState<string>(
+    primaryOnlineAssign?.detailedSolutionContent || ''
+  );
   const [onlineSyncedSolutionCount, setOnlineSyncedSolutionCount] = useState<number>(0);
 
   // Bước 2: Cấu hình kỳ thi
   const [onlineConfigTitle, setOnlineConfigTitle] = useState<string>(
-    'Kiểm Tra Giữa Học Kỳ I - Năm Học 2026 - 2027'
+    primaryOnlineAssign?.examTitle || 'Kiểm Tra Giữa Học Kỳ I - Năm Học 2026 - 2027'
   );
   const [onlineConfigSubject, setOnlineConfigSubject] = useState<string>(
-    examData.subject || 'Vật Lý 12'
+    primaryOnlineAssign?.subject || examData.subject || 'Vật Lý 12'
   );
   const [availableClasses, setAvailableClasses] = useState<string[]>(() => {
     try {
@@ -311,6 +325,13 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     return DEFAULT_SCHOOL_CLASSES;
   });
   const [selectedOnlineClasses, setSelectedOnlineClasses] = useState<string[]>(() => {
+    if (
+      primaryOnlineAssign?.assignedClasses &&
+      Array.isArray(primaryOnlineAssign.assignedClasses) &&
+      primaryOnlineAssign.assignedClasses.length > 0
+    ) {
+      return primaryOnlineAssign.assignedClasses;
+    }
     try {
       const raw = localStorage.getItem(SCHOOL_CLASSES_STORAGE_KEY);
       if (raw) {
@@ -325,17 +346,31 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     return ['12A1', '12A2'];
   });
   const [newClassNameInput, setNewClassNameInput] = useState<string>('');
-  const [onlineStartTime, setOnlineStartTime] = useState<string>('2026-11-10T07:30');
-  const [onlineEndTime, setOnlineEndTime] = useState<string>('2026-11-10T22:00');
-  const [onlineDurationMinutes, setOnlineDurationMinutes] = useState<number>(50);
-  const [onlineExamMode, setOnlineExamMode] = useState<'exam' | 'practice'>('exam');
-  const [onlineViolationLevel, setOnlineViolationLevel] = useState<ViolationEnforcementLevel>(2);
+  const [onlineStartTime, setOnlineStartTime] = useState<string>(
+    primaryOnlineAssign?.startTime || '2026-11-10T07:30'
+  );
+  const [onlineEndTime, setOnlineEndTime] = useState<string>(
+    primaryOnlineAssign?.endTime || '2026-11-10T22:00'
+  );
+  const [onlineDurationMinutes, setOnlineDurationMinutes] = useState<number>(
+    primaryOnlineAssign?.durationMinutes || 50
+  );
+  const [onlineExamMode, setOnlineExamMode] = useState<'exam' | 'practice'>(
+    primaryOnlineAssign?.mode === 'practice' ? 'practice' : 'exam'
+  );
+  const [onlineViolationLevel, setOnlineViolationLevel] = useState<ViolationEnforcementLevel>(
+    primaryOnlineAssign?.violationLevel || 2
+  );
 
   // Bước 3: Giao bài
-  const [onlineDispatchCode, setOnlineDispatchCode] = useState<string>('1102');
+  const [onlineDispatchCode, setOnlineDispatchCode] = useState<string>(
+    primaryOnlineAssign?.examCode || '1102'
+  );
   const [copiedDispatchCode, setCopiedDispatchCode] = useState<boolean>(false);
   const [copiedDispatchLink, setCopiedDispatchLink] = useState<boolean>(false);
-  const [isOnlinePublished, setIsOnlinePublished] = useState<boolean>(false);
+  const [isOnlinePublished, setIsOnlinePublished] = useState<boolean>(
+    Boolean(primaryOnlineAssign)
+  );
 
   // Scrambler state & SmartTest Configuration Parameters (4-Step Workflow in Tab 2)
   const [scramblerWizardStep, setScramblerWizardStep] = useState<1 | 2 | 3 | 4>(1);
@@ -1486,14 +1521,21 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
     const maxVio = mode === 'exam' ? getViolationThresholdByLevel(level) : 0;
     const srcMode = overridePartial?.sourceMode ?? onlineSourceMode;
     const baseExamRaw = overridePartial?.examData ?? onlineSelectedExamData;
-    const solContent = overridePartial?.detailedSolutionContent ?? onlineSolutionText;
     const rawSolToMerge =
       overridePartial?.detailedSolutionContent ??
       (onlineRawSolutionDocText.trim() || onlineSolutionText);
+    const mergedSolutionResult = rawSolToMerge.trim()
+      ? parseAndMergeDetailedSolutionDocument(rawSolToMerge, baseExamRaw)
+      : null;
     const baseExam =
-      srcMode === 'upload_with_solution' && rawSolToMerge.trim()
-        ? parseAndMergeDetailedSolutionDocument(rawSolToMerge, baseExamRaw).mergedExam
+      mergedSolutionResult && mergedSolutionResult.matchedQuestionCount > 0
+        ? mergedSolutionResult.mergedExam
         : baseExamRaw;
+    const solContent =
+      (overridePartial?.detailedSolutionContent ?? onlineSolutionText).trim() ||
+      (mergedSolutionResult && mergedSolutionResult.matchedQuestionCount > 0
+        ? mergedSolutionResult.formattedSolutionSummary
+        : rawSolToMerge.trim());
     const solFileName =
       overridePartial?.detailedSolutionFileName !== undefined
         ? overridePartial.detailedSolutionFileName || undefined
@@ -1599,7 +1641,6 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       setOnlineConfigTitle(detectedTitle);
       setOnlineConfigSubject(detectedSubject);
       setOnlineDurationMinutes(detectedDuration);
-      setOnlineExamMode('practice'); // Chế độ 2 hỗ trợ học sinh xem lời giải chi tiết để ôn tập
       onUpdateExamData(updatedExam);
 
       if (isOnlinePublished && onSaveOnlineAssignment) {
@@ -1631,7 +1672,6 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
       };
       setOnlineSelectedExamData(fallbackExam);
       setOnlineConfigTitle(fallbackTitle);
-      setOnlineExamMode('practice');
       onUpdateExamData(fallbackExam);
     }
   };
@@ -1676,7 +1716,6 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
         setOnlineSyncedSolutionCount(matchedQuestionCount);
         setOnlineSolutionText(displaySummary);
         setOnlineSelectedExamData(mergedExam);
-        setOnlineExamMode('practice');
         onUpdateExamData(mergedExam);
 
         if (isOnlinePublished && onSaveOnlineAssignment) {
@@ -1785,9 +1824,10 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
   const handlePublishAndSyncOnlineExam = () => {
     const payload = buildSynchronizedAssignmentPayload();
     setOnlineSelectedExamData(payload.examData);
-    onUpdateExamData(payload.examData);
     if (onSaveOnlineAssignment) {
       onSaveOnlineAssignment(payload);
+    } else {
+      onUpdateExamData(payload.examData);
     }
     setOnlineAssignmentCode(payload.examCode);
     setIsOnlinePublished(true);
@@ -2261,14 +2301,20 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                                     Mã bài thi
                                   </button>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteSavedBankItem(item.id)}
-                                  title="Xoá đề khỏi thư mục"
-                                  className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
+                                <HelpTooltip
+                                  title="Xoá Đề Khỏi Thư Mục"
+                                  description="Gỡ bỏ đề thi này khỏi thư mục lưu trữ hiện tại trong Ngân hàng đề."
+                                  align="end"
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteSavedBankItem(item.id)}
+                                    title="Xoá đề khỏi thư mục"
+                                    className="p-1 text-slate-400 hover:text-rose-400 transition-colors"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </HelpTooltip>
                               </div>
                             </div>
                           );
@@ -4712,19 +4758,25 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                       <span>Quay Lại Bước 3. Cấu Hình Trộn Đề</span>
                     </button>
 
-                    <button
-                      type="button"
-                      disabled={isScrambling}
-                      onClick={() => handleApplyScramblerConfig(true)}
-                      className="inline-flex items-center justify-center gap-2.5 px-7 py-3.5 text-sm sm:text-base font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl shadow-xl shadow-emerald-950/60 transition-all"
+                    <HelpTooltip
+                      title="Trộn Lại & Sinh Đề Hoán Vị (Regenerate)"
+                      description="Tạo bộ mã đề hoán vị mới theo thuật toán Fisher-Yates chuẩn GDPT 2018 và tự động đóng gói file nén .ZIP (gồm Đề Word .docx, Bảng đáp án .doc và File chấm máy TNMaker .xls)."
+                      align="end"
                     >
-                      <Shuffle className={`w-5 h-5 ${isScrambling ? 'animate-spin' : ''}`} />
-                      <span>
-                        {isScrambling
-                          ? 'Đang Trộn Đề & Đóng Gói File Nén (.ZIP)...'
-                          : '🔀 Bắt Đầu Trộn Đề & Tự Động Tải Gói Đề (.ZIP)'}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        disabled={isScrambling}
+                        onClick={() => handleApplyScramblerConfig(true)}
+                        className="inline-flex items-center justify-center gap-2.5 px-7 py-3.5 text-sm sm:text-base font-bold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl shadow-xl shadow-emerald-950/60 transition-all"
+                      >
+                        <Shuffle className={`w-5 h-5 ${isScrambling ? 'animate-spin' : ''}`} />
+                        <span>
+                          {isScrambling
+                            ? 'Đang Trộn Đề & Đóng Gói File Nén (.ZIP)...'
+                            : '🔀 Bắt Đầu Trộn Đề & Tự Động Tải Gói Đề (.ZIP)'}
+                        </span>
+                      </button>
+                    </HelpTooltip>
                   </div>
 
                   {/* Thông báo xác nhận sau khi đã trộn và tự động tải file ZIP */}
@@ -4744,38 +4796,62 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                         </div>
 
                         <div className="flex flex-wrap items-center gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleExportFullZipPackage()}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors"
+                          <HelpTooltip
+                            title="Tải Gói Nén Đầy Đủ (.ZIP)"
+                            description="Tải lại gói .ZIP chứa toàn bộ đề thi Word (.docx), bảng đáp án tổng hợp (.doc) và file Excel chấm máy TNMaker (.xls)."
+                            align="end"
                           >
-                            <FolderArchive className="w-3.5 h-3.5" />
-                            <span>Tải Lại Gói .ZIP</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleExportWordDocsOnly()}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors"
+                            <button
+                              type="button"
+                              onClick={() => handleExportFullZipPackage()}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors"
+                            >
+                              <FolderArchive className="w-3.5 h-3.5" />
+                              <span>Tải Lại Gói .ZIP</span>
+                            </button>
+                          </HelpTooltip>
+                          <HelpTooltip
+                            title="Xuất Đề Thi Word (.docx)"
+                            description="Tải riêng file đề thi định dạng Microsoft Word (.docx) đã chuẩn hóa công thức và tiêu đề để in ấn."
+                            align="center"
                           >
-                            <FileText className="w-3.5 h-3.5 text-violet-400" />
-                            <span>Đề Word (.docx)</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleExportMasterAnswerKeyDoc()}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors"
+                            <button
+                              type="button"
+                              onClick={() => handleExportWordDocsOnly()}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-violet-400" />
+                              <span>Đề Word (.docx)</span>
+                            </button>
+                          </HelpTooltip>
+                          <HelpTooltip
+                            title="Xuất Bảng Đáp Án Word (.doc)"
+                            description="Tải bảng đáp án tổng hợp của tất cả mã đề (Phần I, Phần II định dạng ĐSĐĐ, Phần III) chuẩn font Times New Roman."
+                            align="center"
                           >
-                            <Table className="w-3.5 h-3.5 text-indigo-400" />
-                            <span>Đáp Án Word (.doc)</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleExportTNMakerExcel()}
-                            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-emerald-700/60 rounded-lg transition-colors"
+                            <button
+                              type="button"
+                              onClick={() => handleExportMasterAnswerKeyDoc()}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors"
+                            >
+                              <Table className="w-3.5 h-3.5 text-indigo-400" />
+                              <span>Đáp Án Word (.doc)</span>
+                            </button>
+                          </HelpTooltip>
+                          <HelpTooltip
+                            title="Xuất Đáp Án Chấm Máy TNMaker (.xls)"
+                            description="Tải file Excel đáp án chuẩn định dạng phần mềm chấm phiếu trắc nghiệm trên điện thoại TNMaker."
+                            align="end"
                           >
-                            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Đáp Án TNMaker (.xls)</span>
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() => handleExportTNMakerExcel()}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-emerald-700/60 rounded-lg transition-colors"
+                            >
+                              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Đáp Án TNMaker (.xls)</span>
+                            </button>
+                          </HelpTooltip>
                         </div>
                       </div>
                     </div>
@@ -4885,14 +4961,20 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                 />
               </div>
 
-              <button
-                type="button"
-                onClick={onSimulateLabTick}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium bg-indigo-950 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/60 rounded-lg transition-colors whitespace-nowrap shrink-0"
+              <HelpTooltip
+                title="Làm Mới Trạng Thái Phòng Máy (Regenerate / Sync)"
+                description="Cập nhật tức thời tiến độ câu hỏi, thời gian còn lại và tín hiệu kết nối từ tất cả các máy trạm trong mạng LAN."
+                align="end"
               >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Cập Nhật Xung Nhịp Phòng Máy</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={onSimulateLabTick}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium bg-indigo-950 hover:bg-indigo-900 text-indigo-200 border border-indigo-700/60 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Cập Nhật Xung Nhịp Phòng Máy</span>
+                </button>
+              </HelpTooltip>
             </div>
           </div>
 
@@ -4994,13 +5076,19 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                               Chi tiết
                             </button>
                             {ws.violationCount > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => onResetWorkstationViolations(ws.workstationId)}
-                                className="px-2.5 py-1 text-xs font-medium bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-700/60 rounded transition-colors whitespace-nowrap shrink-0"
+                              <HelpTooltip
+                                title="Xoá Cảnh Báo Vi Phạm (Reset Session Alert)"
+                                description="Đặt lại bộ đếm vi phạm chuyển tab/thoát toàn màn hình về 0 để cho phép thí sinh tiếp tục làm bài bình thường."
+                                align="end"
                               >
-                                Xoá cảnh báo
-                              </button>
+                                <button
+                                  type="button"
+                                  onClick={() => onResetWorkstationViolations(ws.workstationId)}
+                                  className="px-2.5 py-1 text-xs font-medium bg-amber-950/80 hover:bg-amber-900 text-amber-300 border border-amber-700/60 rounded transition-colors whitespace-nowrap shrink-0"
+                                >
+                                  Xoá cảnh báo
+                                </button>
+                              </HelpTooltip>
                             )}
                           </div>
                         </td>
@@ -5139,69 +5227,75 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                   const isActive = onlineOrgStep === s.step;
                   const isDone = onlineOrgStep > s.step;
                   return (
-                    <button
-                      key={s.step}
-                      type="button"
-                      onClick={() => setOnlineOrgStep(s.step)}
-                      className={`text-left px-4 py-3 rounded-xl border transition-all ${
-                        isActive
-                          ? 'bg-violet-600/25 border-violet-400 text-white shadow-md shadow-violet-950/50'
-                          : isDone
-                          ? 'bg-emerald-950/40 border-emerald-600/60 text-emerald-200 hover:bg-emerald-950/60'
-                          : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs sm:text-sm font-bold">{s.title}</span>
-                        {isDone && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5 truncate">{s.sub}</div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* ===============================================================
-                BƯỚC 1: CHỌN ĐỀ (CHẾ ĐỘ 1: CHỌN TỪ NGÂN HÀNG | CHẾ ĐỘ 2: TẢI ĐỀ + LỜI GIẢI CHI TIẾT)
-            =============================================================== */}
-            {onlineOrgStep === 1 && (
-              <div className="space-y-6">
-                {/* 2 Mode Selector Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <button
-                    type="button"
-                    onClick={() => setOnlineSourceMode('bank')}
-                    className={`p-5 rounded-2xl border-2 text-left transition-all space-y-2 ${
-                      onlineSourceMode === 'bank'
-                        ? 'bg-violet-950/50 border-violet-500 text-white shadow-lg shadow-violet-950/40'
-                        : 'bg-slate-900/80 border-slate-800 text-slate-300 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="px-2.5 py-1 rounded-md text-xs font-mono font-bold bg-violet-600 text-white">
-                        CHẾ ĐỘ 1
-                      </span>
-                      {onlineSourceMode === 'bank' && (
-                        <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1">
-                          <CheckCircle2 className="w-4 h-4" /> Đang chọn
-                        </span>
-                      )}
-                    </div>
-                    <h3 className="text-base sm:text-lg font-bold text-white">
-                      1. Chọn Đề Từ Ngân Hàng Đề
-                    </h3>
-                    <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                      Lựa chọn nhanh các đề thi đã lưu và kiểm định trong các thư mục Ngân hàng đề (KTTX, KTGHK, KTCHK, Thi Tốt Nghiệp...).
-                    </p>
-                  </button>
-
-                  <button
+                    key={s.step}
                     type="button"
                     onClick={() => {
-                      setOnlineSourceMode('upload_with_solution');
-                      setOnlineExamMode('practice');
+                      if (onlineOrgStep === 2 && onSaveOnlineAssignment) {
+                        const payload = buildSynchronizedAssignmentPayload();
+                        onSaveOnlineAssignment(payload);
+                        setIsOnlinePublished(true);
+                      }
+                      setOnlineOrgStep(s.step);
                     }}
+                    className={`text-left px-4 py-3 rounded-xl border transition-all ${
+                      isActive
+                        ? 'bg-violet-600/25 border-violet-400 text-white shadow-md shadow-violet-950/50'
+                        : isDone
+                        ? 'bg-emerald-950/40 border-emerald-600/60 text-emerald-200 hover:bg-emerald-950/60'
+                        : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs sm:text-sm font-bold">{s.title}</span>
+                      {isDone && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5 truncate">{s.sub}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ===============================================================
+              BƯỚC 1: CHỌN ĐỀ (CHẾ ĐỘ 1: CHỌN TỪ NGÂN HÀNG | CHẾ ĐỘ 2: TẢI ĐỀ + LỜI GIẢI CHI TIẾT)
+          =============================================================== */}
+          {onlineOrgStep === 1 && (
+            <div className="space-y-6">
+              {/* 2 Mode Selector Cards */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button
+                  type="button"
+                  onClick={() => setOnlineSourceMode('bank')}
+                  className={`p-5 rounded-2xl border-2 text-left transition-all space-y-2 ${
+                    onlineSourceMode === 'bank'
+                      ? 'bg-violet-950/50 border-violet-500 text-white shadow-lg shadow-violet-950/40'
+                      : 'bg-slate-900/80 border-slate-800 text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="px-2.5 py-1 rounded-md text-xs font-mono font-bold bg-violet-600 text-white">
+                      CHẾ ĐỘ 1
+                    </span>
+                    {onlineSourceMode === 'bank' && (
+                      <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 className="w-4 h-4" /> Đang chọn
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="text-base sm:text-lg font-bold text-white">
+                    1. Chọn Đề Từ Ngân Hàng Đề
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                    Lựa chọn nhanh các đề thi đã lưu và kiểm định trong các thư mục Ngân hàng đề (KTTX, KTGHK, KTCHK, Thi Tốt Nghiệp...).
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOnlineSourceMode('upload_with_solution');
+                  }}
                     className={`p-5 rounded-2xl border-2 text-left transition-all space-y-2 ${
                       onlineSourceMode === 'upload_with_solution'
                         ? 'bg-emerald-950/40 border-emerald-500 text-white shadow-lg shadow-emerald-950/40'
@@ -5688,7 +5782,17 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* Card A: Chế độ Kiểm tra (Thu bài cưỡng chế Mức 1, 2, 3) */}
                       <div
-                        onClick={() => setOnlineExamMode('exam')}
+                        onClick={() => {
+                          setOnlineExamMode('exam');
+                          if (onSaveOnlineAssignment) {
+                            onSaveOnlineAssignment(
+                              buildSynchronizedAssignmentPayload({
+                                mode: 'exam',
+                                violationLevel: onlineViolationLevel,
+                              })
+                            );
+                          }
+                        }}
                         className={`cursor-pointer p-5 rounded-2xl border-2 transition-all space-y-4 ${
                           onlineExamMode === 'exam'
                             ? 'bg-rose-950/35 border-rose-500 text-white shadow-lg'
@@ -5705,13 +5809,23 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                           <input
                             type="radio"
                             checked={onlineExamMode === 'exam'}
-                            onChange={() => setOnlineExamMode('exam')}
+                            onChange={() => {
+                              setOnlineExamMode('exam');
+                              if (onSaveOnlineAssignment) {
+                                onSaveOnlineAssignment(
+                                  buildSynchronizedAssignmentPayload({
+                                    mode: 'exam',
+                                    violationLevel: onlineViolationLevel,
+                                  })
+                                );
+                              }
+                            }}
                             className="w-4 h-4 accent-rose-500"
                           />
                         </div>
 
                         <p className="text-xs text-slate-300 leading-relaxed">
-                          Nếu học sinh chuyển Tab hoặc thoát Toàn màn hình vượt số lần quy định, hệ thống tự động <strong>thu bài cưỡng chế</strong> ngay lập tức:
+                          Bật hệ thống <strong>Giám sát chống gian lận</strong>. Nếu học sinh chuyển Tab, rời cửa sổ làm bài hoặc thoát Toàn màn hình chạm ngưỡng quy định, hệ thống tự động <strong>thu bài cưỡng chế</strong> ngay lập tức:
                         </p>
 
                         <div className="p-2.5 rounded-xl bg-rose-950/70 border border-rose-500/40 text-xs text-rose-200 font-medium leading-relaxed">
@@ -5748,6 +5862,14 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                                   e.stopPropagation();
                                   setOnlineExamMode('exam');
                                   setOnlineViolationLevel(lv.level);
+                                  if (onSaveOnlineAssignment) {
+                                    onSaveOnlineAssignment(
+                                      buildSynchronizedAssignmentPayload({
+                                        mode: 'exam',
+                                        violationLevel: lv.level,
+                                      })
+                                    );
+                                  }
                                 }}
                                 className={`p-3 rounded-xl border text-left transition-all ${
                                   selected
@@ -5761,11 +5883,31 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                             );
                           })}
                         </div>
+
+                        {onlineExamMode === 'exam' && (
+                          <div className="px-3 py-2 rounded-xl bg-rose-900/40 border border-rose-400/50 text-xs font-mono text-rose-100 flex items-center justify-between gap-2">
+                            <span>
+                              ✓ Đang áp dụng: <strong>Mức {onlineViolationLevel}</strong>
+                            </span>
+                            <span className="font-bold text-amber-300">
+                              Tối đa {getViolationThresholdByLevel(onlineViolationLevel)} lần vi phạm → Thu bài cưỡng chế
+                            </span>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Card B: Chế độ Ôn tập (Không thu bài cưỡng chế) */}
+                      {/* Card B: Chế độ Ôn tập (Không thu bài cưỡng chế & Không hiển thị Giám sát) */}
                       <div
-                        onClick={() => setOnlineExamMode('practice')}
+                        onClick={() => {
+                          setOnlineExamMode('practice');
+                          if (onSaveOnlineAssignment) {
+                            onSaveOnlineAssignment(
+                              buildSynchronizedAssignmentPayload({
+                                mode: 'practice',
+                              })
+                            );
+                          }
+                        }}
                         className={`cursor-pointer p-5 rounded-2xl border-2 transition-all space-y-4 ${
                           onlineExamMode === 'practice'
                             ? 'bg-emerald-950/35 border-emerald-500 text-white shadow-lg'
@@ -5782,18 +5924,28 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                           <input
                             type="radio"
                             checked={onlineExamMode === 'practice'}
-                            onChange={() => setOnlineExamMode('practice')}
+                            onChange={() => {
+                              setOnlineExamMode('practice');
+                              if (onSaveOnlineAssignment) {
+                                onSaveOnlineAssignment(
+                                  buildSynchronizedAssignmentPayload({
+                                    mode: 'practice',
+                                  })
+                                );
+                              }
+                            }}
                             className="w-4 h-4 accent-emerald-500"
                           />
                         </div>
 
                         <p className="text-xs text-slate-300 leading-relaxed">
-                          Dành cho học sinh tự luyện tập tại nhà hoặc trên lớp: <strong>Không thu bài cưỡng chế</strong> khi chuyển cửa sổ, đồng thời mở đầy đủ <strong>Lời giải chi tiết & Đáp án từng câu</strong> ngay sau khi nộp bài.
+                          Dành cho học sinh tự luyện tập tại nhà hoặc trên lớp: <strong>Không hiển thị thanh Giám sát</strong>, <strong>không thu bài cưỡng chế</strong> khi chuyển cửa sổ, đồng thời mở đầy đủ <strong>Lời giải chi tiết &amp; Đáp án từng câu</strong> ngay sau khi nộp bài.
                         </p>
 
                         <div className="p-3 rounded-xl bg-slate-950/80 border border-emerald-800/60 text-xs text-emerald-300 font-mono space-y-1">
+                          <div>✓ Ẩn hoàn toàn mục Giám sát &amp; cảnh báo vi phạm trong phòng làm bài.</div>
                           <div>✓ Giữ nguyên thứ tự câu hỏi và đáp án gốc (không xáo trộn).</div>
-                          <div>✓ Mở toàn bộ lời giải chi tiết sau khi nộp bài · Không giới hạn số lần cảnh báo.</div>
+                          <div>✓ Mở toàn bộ lời giải chi tiết &amp; đáp án ngay sau khi nộp bài.</div>
                         </div>
                       </div>
                     </div>
@@ -5814,10 +5966,15 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      const syncedPayload = buildSynchronizedAssignmentPayload();
+                      const payload = buildSynchronizedAssignmentPayload();
+                      setOnlineSelectedExamData(payload.examData);
                       if (onSaveOnlineAssignment) {
-                        onSaveOnlineAssignment(syncedPayload);
+                        onSaveOnlineAssignment(payload);
+                      } else {
+                        onUpdateExamData(payload.examData);
                       }
+                      setOnlineAssignmentCode(payload.examCode);
+                      setIsOnlinePublished(true);
                       setOnlineOrgStep(3);
                     }}
                     className="inline-flex items-center gap-2 px-6 py-3 text-sm sm:text-base font-bold bg-violet-600 hover:bg-violet-500 text-white rounded-xl shadow-lg transition-all"
@@ -5865,13 +6022,7 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                           type="text"
                           value={onlineDispatchCode}
                           onChange={(e) => {
-                            const nextCode = e.target.value;
-                            setOnlineDispatchCode(nextCode);
-                            if (onSaveOnlineAssignment && nextCode.trim()) {
-                              onSaveOnlineAssignment(
-                                buildSynchronizedAssignmentPayload({ examCode: nextCode })
-                              );
-                            }
+                            setOnlineDispatchCode(e.target.value);
                           }}
                           className="min-w-0 flex-1 px-3 py-2.5 rounded-xl bg-slate-950 border border-violet-600/70 text-lg font-mono font-extrabold text-amber-300 text-center focus:outline-none focus:border-violet-400"
                           placeholder="1102"
@@ -5881,11 +6032,6 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                           onClick={() => {
                             const randomCode = String(Math.floor(1000 + Math.random() * 9000));
                             setOnlineDispatchCode(randomCode);
-                            if (onSaveOnlineAssignment) {
-                              onSaveOnlineAssignment(
-                                buildSynchronizedAssignmentPayload({ examCode: randomCode })
-                              );
-                            }
                           }}
                           className="px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 shrink-0"
                           title="Tạo mã bài thi ngẫu nhiên"
@@ -6117,20 +6263,53 @@ export const TeacherPortal: React.FC<TeacherPortalProps> = ({
                             <div className="flex flex-wrap items-center gap-2 shrink-0">
                               <button
                                 type="button"
+                                onClick={() => {
+                                  setOnlineDispatchCode(assign.examCode);
+                                  setOnlineConfigTitle(assign.examTitle);
+                                  setOnlineConfigSubject(assign.subject);
+                                  setOnlineDurationMinutes(assign.durationMinutes);
+                                  setSelectedOnlineClasses(assign.assignedClasses);
+                                  setOnlineStartTime(assign.startTime || onlineStartTime);
+                                  setOnlineEndTime(assign.endTime || onlineEndTime);
+                                  setOnlineExamMode(assign.mode === 'practice' ? 'practice' : 'exam');
+                                  setOnlineViolationLevel(assign.violationLevel || 2);
+                                  setOnlineSourceMode(assign.sourceMode || 'bank');
+                                  if (assign.examData) {
+                                    setOnlineSelectedExamData(assign.examData);
+                                  }
+                                  if (assign.detailedSolutionContent) {
+                                    setOnlineSolutionText(assign.detailedSolutionContent);
+                                    setOnlineRawSolutionDocText(assign.detailedSolutionContent);
+                                  }
+                                  setIsOnlinePublished(true);
+                                  setOnlineOrgStep(2);
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200"
+                              >
+                                Cấu Hình (Bước 2)
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => onLaunchStudentWithCode(assign.examCode)}
                                 className="px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-xs font-bold text-white"
                               >
                                 Vào Thi Mã {assign.examCode}
                               </button>
                               {onDeleteOnlineAssignment && onlineAssignments.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => onDeleteOnlineAssignment(assign.id)}
-                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-300"
-                                  title="Xoá đợt giao bài"
+                                <HelpTooltip
+                                  title="Xoá Phiên Giao Bài (Delete Session)"
+                                  description="Gỡ bỏ mã bài thi trực tuyến này khỏi danh sách phát hành. Đề gốc trong Ngân hàng đề vẫn được giữ nguyên."
+                                  align="end"
                                 >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => onDeleteOnlineAssignment(assign.id)}
+                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-300"
+                                    title="Xoá đợt giao bài"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </HelpTooltip>
                               )}
                             </div>
                           </div>

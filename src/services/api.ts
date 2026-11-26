@@ -4,7 +4,11 @@ import {
   SavedExamSession,
   ScrambledExamVariant,
 } from '../types/exam';
-import { generateMultipleVariants } from '../utils/scramblerAndGrader';
+import {
+  generateMultipleVariants,
+  restoreUnshuffledVariant,
+} from '../utils/scramblerAndGrader';
+import { parseAndMergeDetailedSolutionDocument } from '../utils/examDocumentParser';
 
 const API_BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || '';
 const LOCAL_EXAMS_BACKUP_KEY = 'smarttest_gdpt2018_cloud_exams_backup_v1';
@@ -47,14 +51,24 @@ export interface CloudSubmissionResponse {
  * { examData, variants, assignment } so any student device immediately gets the real questions.
  */
 export function normalizeCloudExamRecord(
-  doc: Record<string, any> | null | undefined,
+  rawDoc: Record<string, any> | null | undefined,
   requestedCode?: string
 ): {
   examData: ExamData;
   variants: ScrambledExamVariant[];
   assignment: OnlineExamAssignment;
 } | null {
-  if (!doc) return null;
+  if (!rawDoc) return null;
+
+  // Support both unwrapped exam document and { success, storage, exam } wrapper
+  const doc =
+    rawDoc.exam &&
+    typeof rawDoc.exam === 'object' &&
+    (Array.isArray(rawDoc.exam.part1) ||
+      rawDoc.exam.examData ||
+      Array.isArray(rawDoc.exam.variants))
+      ? rawDoc.exam
+      : rawDoc;
 
   const rawPart1 = Array.isArray(doc.part1)
     ? doc.part1
@@ -114,7 +128,7 @@ export function normalizeCloudExamRecord(
         fallbackVariant?.durationMinutes
     ) || 50;
 
-  const examData: ExamData = {
+  let examData: ExamData = {
     examId: resolvedExamId,
     title: resolvedTitle,
     subject: resolvedSubject,
@@ -129,23 +143,54 @@ export function normalizeCloudExamRecord(
     part3: hasTopLevelQuestions ? rawPart3 : fallbackVariant.part3 || [],
   };
 
-  let variants: ScrambledExamVariant[] = rawVariants.filter(
-    (v) =>
-      v &&
-      Array.isArray(v.part1) &&
-      v.part1.length + (v.part2?.length || 0) + (v.part3?.length || 0) > 0
-  );
+  const rawSolutionText = String(doc.detailedSolutionContent || '').trim();
+  if (rawSolutionText) {
+    try {
+      const mergedResult = parseAndMergeDetailedSolutionDocument(
+        rawSolutionText,
+        examData
+      );
+      if (mergedResult.matchedQuestionCount > 0) {
+        examData = mergedResult.mergedExam;
+      }
+    } catch {
+      // Keep original examData if solution merge fails
+    }
+  }
+
+  let variants: ScrambledExamVariant[] = rawVariants
+    .filter(
+      (v) =>
+        v &&
+        Array.isArray(v.part1) &&
+        v.part1.length + (v.part2?.length || 0) + (v.part3?.length || 0) > 0
+    )
+    .map((v) =>
+      rawSolutionText ? restoreUnshuffledVariant(v, examData) : v
+    );
 
   const hasRequestedVariant = variants.some(
     (v) => v.code.trim().toUpperCase() === resolvedCode.toUpperCase()
   );
 
   if (!hasRequestedVariant) {
-    const generated = generateMultipleVariants(
-      examData,
-      [resolvedCode],
-      `CLOUD-SYNC-${resolvedCode}`
-    );
+    const generated =
+      doc.mode === 'practice'
+        ? [
+            restoreUnshuffledVariant(
+              generateMultipleVariants(
+                examData,
+                [resolvedCode],
+                `CLOUD-SYNC-${resolvedCode}`
+              )[0],
+              examData
+            ),
+          ]
+        : generateMultipleVariants(
+            examData,
+            [resolvedCode],
+            `CLOUD-SYNC-${resolvedCode}`
+          );
     variants = [...generated, ...variants];
   }
 
@@ -162,6 +207,23 @@ export function normalizeCloudExamRecord(
       ? window.location.origin
       : 'https://smarttest.edu.vn';
 
+  const resolvedMode: 'exam' | 'practice' =
+    doc.mode === 'practice' ? 'practice' : 'exam';
+  const resolvedViolationLevel: 1 | 2 | 3 =
+    Number(doc.violationLevel) === 1
+      ? 1
+      : Number(doc.violationLevel) === 3
+      ? 3
+      : 2;
+  const resolvedMaxViolations =
+    resolvedMode === 'practice'
+      ? 0
+      : resolvedViolationLevel === 1
+      ? 1
+      : resolvedViolationLevel === 3
+      ? 4
+      : 3;
+
   const assignment: OnlineExamAssignment = {
     id: `ONLINE-ASSIGN-${resolvedCode.toUpperCase()}`,
     examCode: resolvedCode,
@@ -174,16 +236,11 @@ export function normalizeCloudExamRecord(
     startTime: doc.startTime || '',
     endTime: doc.endTime || '',
     durationMinutes: resolvedDuration,
-    mode: doc.mode === 'practice' ? 'practice' : 'exam',
-    violationLevel: (doc.violationLevel as 1 | 2 | 3) || 2,
-    maxViolations:
-      typeof doc.maxViolations === 'number'
-        ? doc.maxViolations
-        : doc.mode === 'practice'
-        ? 0
-        : 3,
-    sourceMode: 'bank',
-    detailedSolutionContent: doc.detailedSolutionContent || undefined,
+    mode: resolvedMode,
+    violationLevel: resolvedViolationLevel,
+    maxViolations: resolvedMaxViolations,
+    sourceMode: rawSolutionText ? 'upload_with_solution' : 'bank',
+    detailedSolutionContent: rawSolutionText || undefined,
     examData,
     createdAt: doc.updatedAt
       ? new Date(doc.updatedAt).toLocaleString('vi-VN')

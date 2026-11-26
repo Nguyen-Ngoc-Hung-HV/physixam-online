@@ -26,6 +26,7 @@ import {
 import { countCompletedQuestions, gradeStudentExam } from '../utils/scramblerAndGrader';
 import { toCleanSlug } from '../utils/exportPackageGenerator';
 import { MathText } from './MathText';
+import { HelpTooltip } from './HelpTooltip';
 
 interface StatisticsPortalProps {
   examData: ExamData;
@@ -424,9 +425,9 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
   };
 
   return (
-    <div className="max-w-[1400px] mx-auto px-6 py-8 space-y-8">
+    <div className="print-statistics-portal max-w-[1400px] mx-auto px-6 py-8 space-y-8">
       {/* Header & Primary Export / Delete Actions — Balanced Full-Width Scientific Layout */}
-      <div className="bg-[#18182e] border border-indigo-900/60 rounded-2xl p-5 sm:p-6 shadow-md space-y-4">
+      <div className="print-stats-card bg-[#18182e] border border-indigo-900/60 rounded-2xl p-5 sm:p-6 shadow-md space-y-4">
         <div className="space-y-1.5">
           <div className="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-violet-400 font-bold">
             <BarChart3 className="w-4 h-4 shrink-0" />
@@ -458,45 +459,73 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
             </span>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-            <button
-              type="button"
-              onClick={handleExportExcelXls}
-              disabled={filteredRows.length === 0}
-              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl shadow-md transition-all whitespace-nowrap shrink-0"
+          <div className="no-print flex flex-wrap items-center gap-2.5 shrink-0">
+            <HelpTooltip
+              title="Xuất Bảng Thống Kê Điểm (Export Statistics Excel)"
+              description="Tải xuống bảng tổng hợp điểm chi tiết (Phần I, II, III, tổng điểm thang 10, xếp loại, thời gian làm bài và số lần vi phạm) định dạng Excel (.xls)."
+              position="bottom"
+              align="end"
             >
-              <FileSpreadsheet className="w-4 h-4 shrink-0" />
-              <span>📥 Tải Kết Quả Về Máy (Excel .xls)</span>
-            </button>
+              <button
+                type="button"
+                onClick={handleExportExcelXls}
+                disabled={filteredRows.length === 0}
+                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl shadow-md transition-all whitespace-nowrap shrink-0"
+              >
+                <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                <span>📥 Tải Kết Quả Về Máy (Excel .xls)</span>
+              </button>
+            </HelpTooltip>
 
-            <button
-              type="button"
-              onClick={handleExportCsv}
-              disabled={filteredRows.length === 0}
-              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-indigo-950/90 hover:bg-indigo-900 disabled:opacity-50 text-indigo-200 border border-indigo-700/70 rounded-xl transition-colors whitespace-nowrap shrink-0"
+            <HelpTooltip
+              title="Xuất File Điểm Chuẩn CSV (Export Statistics CSV)"
+              description="Tải file dữ liệu bảng điểm định dạng CSV mã hóa UTF-8 tương thích để nhập điểm nhanh lên hệ thống sổ điểm điện tử vnEdu và SMAS."
+              position="bottom"
+              align="end"
             >
-              <Download className="w-4 h-4 text-violet-400 shrink-0" />
-              <span>Xuất CSV (vnEdu / SMAS)</span>
-            </button>
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                disabled={filteredRows.length === 0}
+                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-indigo-950/90 hover:bg-indigo-900 disabled:opacity-50 text-indigo-200 border border-indigo-700/70 rounded-xl transition-colors whitespace-nowrap shrink-0"
+              >
+                <Download className="w-4 h-4 text-violet-400 shrink-0" />
+                <span>Xuất CSV (vnEdu / SMAS)</span>
+              </button>
+            </HelpTooltip>
 
             {studentRows.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => setConfirmClearAll(true)}
-                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-700/70 rounded-xl transition-colors whitespace-nowrap shrink-0"
+              <HelpTooltip
+                title="Xoá Toàn Bộ Phiên Thi (Delete Sessions)"
+                description="Dọn sạch danh sách kết quả của ca thi hiện tại sau khi giáo viên đã xuất file lưu trữ để chuẩn bị cho ca thi tiếp theo."
+                position="bottom"
+                align="end"
               >
-                <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
-                <span>Xoá Khi Đã Kiểm Tra Xong</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearAll(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-rose-950/80 hover:bg-rose-900 text-rose-200 border border-rose-700/70 rounded-xl transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Xoá Khi Đã Kiểm Tra Xong</span>
+                </button>
+              </HelpTooltip>
             ) : (
-              <button
-                type="button"
-                onClick={onRestoreSampleRecords}
-                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-colors whitespace-nowrap shrink-0"
+              <HelpTooltip
+                title="Khôi Phục Dữ Liệu Mẫu (Regenerate Sample Data)"
+                description="Tải lại bộ dữ liệu bài làm mẫu của học sinh để kiểm thử các tính năng thống kê, phổ điểm và xuất báo cáo."
+                position="bottom"
+                align="end"
               >
-                <RotateCcw className="w-4 h-4 text-violet-400 shrink-0" />
-                <span>Khôi Phục Dữ Liệu Mẫu</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={onRestoreSampleRecords}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl transition-colors whitespace-nowrap shrink-0"
+                >
+                  <RotateCcw className="w-4 h-4 text-violet-400 shrink-0" />
+                  <span>Khôi Phục Dữ Liệu Mẫu</span>
+                </button>
+              </HelpTooltip>
             )}
           </div>
         </div>
@@ -669,8 +698,8 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
       </div>
 
       {/* Filter & Search Bar */}
-      <div className="bg-[#18182e] border border-indigo-900/60 rounded-2xl p-5 space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="print-stats-card bg-[#18182e] border border-indigo-900/60 rounded-2xl p-5 space-y-4">
+        <div className="no-print flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-2">
             {[
               { id: 'ALL' as const, label: `Tất cả (${studentRows.length})` },
@@ -765,7 +794,7 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
                   <th className="py-3.5 px-3 text-right">Phần III</th>
                   <th className="py-3.5 px-3 text-right">Tổng Điểm</th>
                   <th className="py-3.5 px-3 text-center">Vi Phạm</th>
-                  <th className="py-3.5 px-4 text-right">Thao Tác</th>
+                  <th className="no-print py-3.5 px-4 text-right">Thao Tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/70">
@@ -853,7 +882,7 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
                           <span className="text-xs text-emerald-400">0</span>
                         )}
                       </td>
-                      <td className="py-3.5 px-4 text-right">
+                      <td className="no-print py-3.5 px-4 text-right">
                         <div className="inline-flex items-center justify-end gap-1.5">
                           <button
                             type="button"
@@ -880,14 +909,20 @@ export const StatisticsPortal: React.FC<StatisticsPortalProps> = ({
                               Xoá ngay
                             </button>
                           ) : (
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteKey(row.key)}
-                              title="Xoá kết quả của học sinh này"
-                              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/50 rounded-lg transition-colors"
+                            <HelpTooltip
+                              title="Xoá Phiên Thi Học Sinh (Delete Session)"
+                              description="Xoá bài nộp và phiên làm bài của thí sinh này khỏi bảng thống kê để thí sinh có thể đăng nhập làm bài lại."
+                              align="end"
                             >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteKey(row.key)}
+                                title="Xoá kết quả của học sinh này"
+                                className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/50 rounded-lg transition-colors"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </HelpTooltip>
                           )}
                         </div>
                       </td>

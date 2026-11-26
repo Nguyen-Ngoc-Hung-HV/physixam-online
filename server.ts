@@ -339,6 +339,70 @@ async function startServer() {
         examData.examId || body.examId || `EXAM-${examCode}-${Date.now()}`
       ).trim();
 
+      const isUploadedExamId = /^UPLOAD-\d+$/i.test(examId);
+
+      // Check if an existing record in memory or MongoDB already has detailedSolutionContent for this examId/examCode
+      const existingMem =
+        memoryExamsMap.get(examCode.toUpperCase()) ||
+        memoryExamsMap.get(examId.toUpperCase());
+      let resolvedDetailedSolution =
+        String(body.detailedSolutionContent || '').trim() ||
+        String(existingMem?.detailedSolutionContent || '').trim();
+      let resolvedMode: 'exam' | 'practice' =
+        body.mode === 'practice' || body.mode === 'exam'
+          ? body.mode
+          : existingMem?.mode === 'practice'
+          ? 'practice'
+          : 'exam';
+      let resolvedViolationLevel: 1 | 2 | 3 =
+        Number(body.violationLevel) === 1
+          ? 1
+          : Number(body.violationLevel) === 3
+          ? 3
+          : Number(existingMem?.violationLevel) === 1
+          ? 1
+          : Number(existingMem?.violationLevel) === 3
+          ? 3
+          : 2;
+
+      if (isMongoConnected && (!resolvedDetailedSolution || !body.mode)) {
+        const existingDoc = await ExamModel.findOne({
+          $or: [
+            { examCode: new RegExp(`^${escapeRegex(examCode)}$`, 'i') },
+            ...(isUploadedExamId ? [{ examId }] : []),
+          ],
+        })
+          .sort({ updatedAt: -1 })
+          .lean<{
+            detailedSolutionContent?: string;
+            mode?: string;
+            violationLevel?: number;
+          }>();
+        if (!resolvedDetailedSolution && existingDoc?.detailedSolutionContent) {
+          resolvedDetailedSolution = existingDoc.detailedSolutionContent;
+        }
+        if (!body.mode && (existingDoc?.mode === 'practice' || existingDoc?.mode === 'exam')) {
+          resolvedMode = existingDoc.mode;
+        }
+        if (!body.violationLevel && existingDoc?.violationLevel) {
+          resolvedViolationLevel =
+            Number(existingDoc.violationLevel) === 1
+              ? 1
+              : Number(existingDoc.violationLevel) === 3
+              ? 3
+              : 2;
+        }
+      }
+
+      const resolvedMaxViolations =
+        resolvedMode === 'practice'
+          ? 0
+          : resolvedViolationLevel === 1
+          ? 1
+          : resolvedViolationLevel === 3
+          ? 4
+          : 3;
+
       const payload = {
         examId,
         examCode,
@@ -351,19 +415,30 @@ async function startServer() {
         curriculum: examData.curriculum || 'Chương trình GDPT 2018 — Bộ GD&ĐT',
         durationMinutes: Number(body.durationMinutes || examData.durationMinutes) || 50,
         folderId: body.folderId || 'KTGHK',
-        mode: body.mode || 'exam',
-        violationLevel: body.violationLevel || 2,
-        maxViolations: body.maxViolations ?? 3,
+        mode: resolvedMode,
+        violationLevel: resolvedViolationLevel,
+        maxViolations: resolvedMaxViolations,
         assignedClasses: Array.isArray(body.assignedClasses) ? body.assignedClasses : ['12A1'],
         startTime: body.startTime || '',
         endTime: body.endTime || '',
-        detailedSolutionContent: body.detailedSolutionContent || '',
+        detailedSolutionContent: resolvedDetailedSolution,
         part1: Array.isArray(examData.part1) ? examData.part1 : [],
         part2: Array.isArray(examData.part2) ? examData.part2 : [],
         part3: Array.isArray(examData.part3) ? examData.part3 : [],
         variants: Array.isArray(body.variants) ? body.variants : [],
         updatedAt: new Date().toISOString(),
       };
+
+      if (isUploadedExamId) {
+        for (const [k, v] of memoryExamsMap.entries()) {
+          if (
+            v?.examId === examId &&
+            String(v?.examCode || '').toUpperCase() !== examCode.toUpperCase()
+          ) {
+            memoryExamsMap.delete(k);
+          }
+        }
+      }
 
       memoryExamsMap.set(examId.toUpperCase(), payload);
       memoryExamsMap.set(examCode.toUpperCase(), payload);
@@ -379,6 +454,12 @@ async function startServer() {
 
       if (isMongoConnected) {
         const codeRegex = new RegExp(`^${escapeRegex(examCode)}$`, 'i');
+        if (isUploadedExamId) {
+          await ExamModel.deleteMany({
+            examId,
+            examCode: { $not: codeRegex },
+          });
+        }
         const savedDoc = await ExamModel.findOneAndUpdate(
           { examCode: codeRegex },
           { $set: payload },
@@ -410,10 +491,21 @@ async function startServer() {
   app.get('/api/exams', async (_req: Request, res: Response) => {
     try {
       if (isMongoConnected) {
-        const docs = await ExamModel.find({})
+        const rawDocs = await ExamModel.find({})
           .sort({ updatedAt: -1 })
           .limit(20)
           .lean();
+
+        // Deduplicate uploaded exams (UPLOAD-xxxxx) so intermediate keystrokes don't appear as multiple exam codes
+        const seenUploadIds = new Set<string>();
+        const docs = rawDocs.filter((d: any) => {
+          const exId = String(d?.examId || '').trim();
+          if (/^UPLOAD-\d+$/i.test(exId)) {
+            if (seenUploadIds.has(exId)) return false;
+            seenUploadIds.add(exId);
+          }
+          return true;
+        });
 
         if (docs.length > 0) {
           res.status(200).json({

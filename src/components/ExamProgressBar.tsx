@@ -68,41 +68,42 @@ export const ProgressBar: React.FC<ExamProgressBarProps> = ({
   }
 
   return (
-    <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80">
-      <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
-        <span className="font-extrabold text-white flex items-center gap-1.5">
+    <div className="w-full max-w-full min-w-0 flex flex-wrap items-center justify-between gap-x-2 sm:gap-x-3 gap-y-1 pt-1 border-t border-slate-800/80">
+      <div className="flex flex-wrap items-center gap-1 sm:gap-1.5 text-[11px] sm:text-xs min-w-0">
+        <span className="font-extrabold text-white flex items-center gap-1 whitespace-nowrap shrink-0">
           <CheckCircle2
-            className={`w-4 h-4 shrink-0 ${
+            className={`w-3.5 h-3.5 shrink-0 ${
               isAllDone ? 'text-emerald-400' : 'text-violet-400'
             }`}
           />
-          <span>Tiến Độ Hoàn Thành Bài Thi:</span>
+          <span className="hidden sm:inline">Tiến Độ Hoàn Thành Bài Thi:</span>
+          <span className="sm:hidden">Tiến độ:</span>
         </span>
-        <span className="font-mono font-extrabold text-xs sm:text-sm text-emerald-400 tabular-nums">
+        <span className="font-mono font-extrabold text-emerald-400 tabular-nums whitespace-nowrap">
           {clampedCompleted}/{totalQuestionCount} câu ({percentage}%)
         </span>
         <span aria-hidden="true" className="text-slate-500">
           ·
         </span>
-        <span className="font-mono font-bold text-xs sm:text-sm text-slate-200 tabular-nums">
+        <span className="font-mono font-bold text-slate-200 tabular-nums whitespace-nowrap">
           {remainingCount === 0 ? (
             <span className="text-emerald-400 font-extrabold">
-              Đã hoàn thành 100%
+              Hoàn thành 100%
             </span>
           ) : (
-            `Còn lại: ${remainingCount} câu`
+            `Còn ${remainingCount} câu`
           )}
         </span>
       </div>
 
-      {/* Inline Visual Progress Track */}
+      {/* Inline Visual Progress Track (shown on sm+ so mobile doesn't overflow right margin) */}
       <div
         role="progressbar"
         aria-valuenow={clampedCompleted}
         aria-valuemin={0}
         aria-valuemax={safeTotal}
         aria-label="Thanh tiến độ số lượng câu hỏi đã hoàn thành"
-        className="w-full md:max-w-xs lg:max-w-sm h-2.5 rounded-full bg-slate-950 border border-slate-800 overflow-hidden p-0.5 shrink-0"
+        className="hidden sm:block flex-1 min-w-[80px] max-w-[160px] sm:max-w-xs h-2 rounded-full bg-slate-950 border border-slate-800 overflow-hidden p-0.5"
       >
         <div
           className={`h-full rounded-full transition-all duration-300 ease-out ${
@@ -114,24 +115,24 @@ export const ProgressBar: React.FC<ExamProgressBarProps> = ({
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-1.5 text-xs font-mono font-bold tabular-nums shrink-0">
-        {typeof part1Completed === 'number' && typeof part1Total === 'number' && (
-          <span className="px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-700 text-slate-200">
+      <div className="flex flex-wrap items-center gap-1 text-[11px] font-mono font-bold tabular-nums shrink-0 max-w-full">
+        {typeof part1Completed === 'number' && typeof part1Total === 'number' && part1Total > 0 && (
+          <span className="px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-slate-200 whitespace-nowrap">
             P.I: <strong className="text-white">{part1Completed}/{part1Total}</strong>
           </span>
         )}
-        {typeof part2Completed === 'number' && typeof part2Total === 'number' && (
-          <span className="px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-700 text-slate-200">
+        {typeof part2Completed === 'number' && typeof part2Total === 'number' && part2Total > 0 && (
+          <span className="px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-slate-200 whitespace-nowrap">
             P.II: <strong className="text-white">{part2Completed}/{part2Total}</strong>
           </span>
         )}
-        {typeof part3Completed === 'number' && typeof part3Total === 'number' && (
-          <span className="px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-700 text-slate-200">
+        {typeof part3Completed === 'number' && typeof part3Total === 'number' && part3Total > 0 && (
+          <span className="px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-slate-200 whitespace-nowrap">
             P.III: <strong className="text-white">{part3Completed}/{part3Total}</strong>
           </span>
         )}
         {flaggedCount > 0 && (
-          <span className="px-2 py-0.5 rounded-md bg-amber-500/20 border border-amber-500 text-amber-300 flex items-center gap-1">
+          <span className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500 text-amber-300 flex items-center gap-1 whitespace-nowrap">
             <Flag className="w-3 h-3" />
             <span>{flaggedCount}</span>
           </span>

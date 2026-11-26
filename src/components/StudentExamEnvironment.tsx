@@ -2,24 +2,33 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Award,
+  Check,
   CheckCircle2,
   Clock,
+  Copy,
   Delete,
+  Download,
   Eye,
   Flag,
   Lock,
   Maximize2,
   Play,
+  QrCode,
   RotateCcw,
   Save,
   Send,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
   Sun,
   Moon,
   UserCheck,
+  Volume2,
+  VolumeX,
+  X,
   XCircle,
 } from 'lucide-react';
+import QRCode from 'qrcode';
 import {
   ExamData,
   ExamGradeReport,
@@ -37,7 +46,11 @@ import {
   restoreUnshuffledVariant,
   shuffleVariantForStudent,
 } from '../utils/scramblerAndGrader';
-import { getResolvedQuestionImage } from '../utils/examDocumentParser';
+import {
+  getResolvedQuestionImage,
+  normalizeMathFormulasForKatex,
+  parseAndMergeDetailedSolutionDocument,
+} from '../utils/examDocumentParser';
 import { MathText } from './MathText';
 import { ProgressBar } from './ExamProgressBar';
 import {
@@ -59,9 +72,103 @@ interface StudentExamEnvironmentProps {
 }
 
 const STORAGE_PREFIX = 'smarttest_gdpt2018_session_';
+const AUDIO_CUE_STORAGE_KEY = 'smarttest_gdpt2018_audio_cue_v1';
 
 function getStorageKey(studentId: string, examCode: string): string {
   return `${STORAGE_PREFIX}${studentId.trim().toUpperCase()}_${examCode.trim()}`;
+}
+
+/**
+ * Strips redundant leading "Chọn đáp án X." / "Chọn phương án X." / "Đáp án đúng: X."
+ * from an explanation string so it displays cleanly after "Đáp án đúng: X — Giải thích:"
+ * and after "Lời giải chi tiết:".
+ */
+function formatCleanExplanation(
+  rawExplanation: string | undefined,
+  fallbackLetter?: string
+): string {
+  const raw = (rawExplanation || '').trim();
+  const stripped = raw
+    .replace(
+      /^(?:Chọn\s+(?:đáp\s+án|phương\s+án)?|Đáp\s+án(?:\s+đúng|\s+là)?|ĐA)\s*[:=]?\s*[A-D]\b\s*[.:,-]?\s*/i,
+      ''
+    )
+    .trim();
+  if (stripped) return stripped;
+  if (fallbackLetter) return `Đáp án đúng là ${fallbackLetter}.`;
+  return raw || 'Đã đối chiếu đáp án chuẩn.';
+}
+
+/**
+ * Synthesizes a soft harmonic bell/chime using Web Audio API (no external audio assets required).
+ * - 'five_minutes': Gentle two-tone ascending chime when 5 minutes (300s) remain.
+ * - 'time_expired': Distinct three-tone soft bell cadence when exam time reaches 00:00.
+ */
+function playExamTimeChime(cueType: 'five_minutes' | 'time_expired'): void {
+  try {
+    if (typeof window === 'undefined') return;
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+
+    const ctx = new AudioCtx();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    const notes =
+      cueType === 'five_minutes'
+        ? [
+            { freq: 523.25, delay: 0, duration: 0.45, peakGain: 0.14 }, // C5
+            { freq: 659.25, delay: 0.18, duration: 0.65, peakGain: 0.16 }, // E5
+          ]
+        : [
+            { freq: 783.99, delay: 0, duration: 0.4, peakGain: 0.16 }, // G5
+            { freq: 659.25, delay: 0.2, duration: 0.45, peakGain: 0.15 }, // E5
+            { freq: 523.25, delay: 0.42, duration: 0.8, peakGain: 0.18 }, // C5
+          ];
+
+    const now = ctx.currentTime;
+    notes.forEach(({ freq, delay, duration, peakGain }) => {
+      const startTime = now + delay;
+      const stopTime = startTime + duration;
+
+      const osc = ctx.createOscillator();
+      const harmonicOsc = ctx.createOscillator();
+      const gainNode = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, startTime);
+
+      harmonicOsc.type = 'triangle';
+      harmonicOsc.frequency.setValueAtTime(freq * 2, startTime);
+
+      const harmonicGain = ctx.createGain();
+      harmonicGain.gain.setValueAtTime(0.18, startTime);
+
+      gainNode.gain.setValueAtTime(0.0001, startTime);
+      gainNode.gain.exponentialRampToValueAtTime(peakGain, startTime + 0.025);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, stopTime);
+
+      osc.connect(gainNode);
+      harmonicOsc.connect(harmonicGain);
+      harmonicGain.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      osc.start(startTime);
+      harmonicOsc.start(startTime);
+      osc.stop(stopTime);
+      harmonicOsc.stop(stopTime);
+    });
+
+    const totalDurationMs = cueType === 'five_minutes' ? 1100 : 1500;
+    window.setTimeout(() => {
+      ctx.close().catch(() => {});
+    }, totalDurationMs);
+  } catch {
+    // Ignore Web Audio errors if blocked by browser autoplay settings
+  }
 }
 
 const EMPTY_ANSWERS: StudentAnswersState = {
@@ -113,10 +220,44 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const [showSubmitConfirm, setShowSubmitConfirm] = useState<boolean>(false);
   const [showScorecardModal, setShowScorecardModal] = useState<boolean>(false);
   const [reviewFilter, setReviewFilter] = useState<'ALL' | 'INCORRECT' | 'PART_I' | 'PART_II' | 'PART_III'>('ALL');
+  const [showQrModal, setShowQrModal] = useState<boolean>(false);
+  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>('');
+  const [copiedSessionUrl, setCopiedSessionUrl] = useState<boolean>(false);
 
   const questionRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const questionsContainerRef = useRef<HTMLDivElement | null>(null);
   const [headerOffsetPx, setHeaderOffsetPx] = useState<number>(56);
+  const [audioCueEnabled, setAudioCueEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(AUDIO_CUE_STORAGE_KEY);
+      if (saved === 'false') return false;
+    } catch {
+      // Default to enabled
+    }
+    return true;
+  });
+  const audioCueEnabledRef = useRef<boolean>(audioCueEnabled);
+  const fiveMinChimePlayedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    audioCueEnabledRef.current = audioCueEnabled;
+    try {
+      localStorage.setItem(AUDIO_CUE_STORAGE_KEY, String(audioCueEnabled));
+    } catch {
+      // Ignore storage error
+    }
+  }, [audioCueEnabled]);
+
+  const handleToggleAudioCue = useCallback(() => {
+    setAudioCueEnabled((prev) => {
+      const next = !prev;
+      if (next) {
+        playExamTimeChime('five_minutes');
+      }
+      return next;
+    });
+  }, []);
+
   const onCloudExamLoadedRef = useRef(onCloudExamLoaded);
   useEffect(() => {
     onCloudExamLoadedRef.current = onCloudExamLoaded;
@@ -133,8 +274,8 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
     window.scrollTo({ top: 0, behavior: 'auto' });
     document.body.classList.add('exam-workspace-locked');
 
+    const topNav = document.querySelector('header');
     const updateHeaderOffset = () => {
-      const topNav = document.querySelector('header');
       if (topNav) {
         const rect = topNav.getBoundingClientRect();
         setHeaderOffsetPx(Math.max(48, Math.round(rect.height)));
@@ -142,11 +283,17 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
     };
 
     updateHeaderOffset();
+    let observer: ResizeObserver | null = null;
+    if (topNav && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateHeaderOffset);
+      observer.observe(topNav);
+    }
     window.addEventListener('resize', updateHeaderOffset);
     const resizeTimer = window.setTimeout(updateHeaderOffset, 120);
 
     return () => {
       document.body.classList.remove('exam-workspace-locked');
+      observer?.disconnect();
       window.removeEventListener('resize', updateHeaderOffset);
       window.clearTimeout(resizeTimer);
     };
@@ -202,19 +349,42 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   const matchedOnlineAssignment = useMemo<OnlineExamAssignment | null>(() => {
     const cleanCode = selectedCode.trim().toUpperCase();
     if (cleanCode) {
-      if (
-        cloudAssignment &&
-        cloudAssignment.examCode.trim().toUpperCase() === cleanCode
-      ) {
-        return cloudAssignment;
-      }
-      const found = onlineAssignments.find(
+      const foundLocal = onlineAssignments.find(
         (a) => a.examCode.trim().toUpperCase() === cleanCode
       );
-      if (found) return found;
+      const foundCloud =
+        cloudAssignment &&
+        cloudAssignment.examCode.trim().toUpperCase() === cleanCode
+          ? cloudAssignment
+          : null;
+      if (foundLocal && foundCloud) {
+        return {
+          ...foundCloud,
+          ...foundLocal,
+          detailedSolutionContent:
+            foundLocal.detailedSolutionContent || foundCloud.detailedSolutionContent,
+        };
+      }
+      if (foundLocal) return foundLocal;
+      if (foundCloud) return foundCloud;
     }
-    return cloudAssignment || onlineAssignments[0] || null;
+    return onlineAssignments[0] || cloudAssignment || null;
   }, [onlineAssignments, selectedCode, cloudAssignment]);
+
+  const isPracticeMode = matchedOnlineAssignment?.mode === 'practice';
+  const activeViolationLevel: 1 | 2 | 3 =
+    matchedOnlineAssignment?.violationLevel === 1
+      ? 1
+      : matchedOnlineAssignment?.violationLevel === 3
+      ? 3
+      : 2;
+  const maxAllowedViolations = isPracticeMode
+    ? 0
+    : activeViolationLevel === 1
+    ? 1
+    : activeViolationLevel === 3
+    ? 4
+    : 3;
 
   const activeVariant = useMemo(() => {
     const cleanCode = selectedCode.trim();
@@ -250,23 +420,87 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
       !matchedOnlineAssignment?.examCode ||
       matchedOnlineAssignment.examCode.trim().toUpperCase() === cleanCode.toUpperCase();
 
-    const hydratedBaseVariant =
+    let effectiveExamData =
       assignmentMatchesCode && matchedOnlineAssignment?.examData
-        ? restoreUnshuffledVariant(
-            { ...rawBaseVariant, code: cleanCode || rawBaseVariant.code },
-            matchedOnlineAssignment.examData
-          )
-        : rawBaseVariant;
+        ? matchedOnlineAssignment.examData
+        : undefined;
+
+    if (
+      assignmentMatchesCode &&
+      matchedOnlineAssignment?.detailedSolutionContent?.trim()
+    ) {
+      const baseForMerge: ExamData = effectiveExamData || {
+        examId: `VARIANT-${rawBaseVariant.code}`,
+        title: rawBaseVariant.title,
+        subject: rawBaseVariant.subject,
+        grade: 'Lớp 12',
+        curriculum: 'Chương trình GDPT 2018 — Bộ GD&ĐT',
+        durationMinutes: rawBaseVariant.durationMinutes,
+        part1: rawBaseVariant.part1,
+        part2: rawBaseVariant.part2,
+        part3: rawBaseVariant.part3,
+      };
+      try {
+        const mergedResult = parseAndMergeDetailedSolutionDocument(
+          matchedOnlineAssignment.detailedSolutionContent,
+          baseForMerge
+        );
+        if (mergedResult.matchedQuestionCount > 0) {
+          effectiveExamData = mergedResult.mergedExam;
+        }
+      } catch {
+        // Keep effectiveExamData if merge fails
+      }
+    }
+
+    const hydratedBaseVariant = effectiveExamData
+      ? restoreUnshuffledVariant(
+          { ...rawBaseVariant, code: cleanCode || rawBaseVariant.code },
+          effectiveExamData
+        )
+      : rawBaseVariant;
+
+    const normalizeVariantFormulas = (variant: ScrambledExamVariant): ScrambledExamVariant => ({
+      ...variant,
+      part1: variant.part1.map((q) => ({
+        ...q,
+        question: normalizeMathFormulasForKatex(q.question),
+        options: [
+          normalizeMathFormulasForKatex(q.options[0]),
+          normalizeMathFormulasForKatex(q.options[1]),
+          normalizeMathFormulasForKatex(q.options[2]),
+          normalizeMathFormulasForKatex(q.options[3]),
+        ],
+        explanation: normalizeMathFormulasForKatex(q.explanation || ''),
+      })),
+      part2: variant.part2.map((q) => ({
+        ...q,
+        stem: normalizeMathFormulasForKatex(q.stem),
+        statements: q.statements.map((stmt) => ({
+          ...stmt,
+          text: normalizeMathFormulasForKatex(stmt.text),
+          explanation: stmt.explanation ? normalizeMathFormulasForKatex(stmt.explanation) : stmt.explanation,
+        })) as typeof q.statements,
+        explanation: normalizeMathFormulasForKatex(q.explanation || ''),
+      })),
+      part3: variant.part3.map((q) => ({
+        ...q,
+        question: normalizeMathFormulasForKatex(q.question),
+        explanation: normalizeMathFormulasForKatex(q.explanation || ''),
+      })),
+    });
 
     // Chế độ ôn tập: giữ nguyên thứ tự các câu hỏi và đáp án gốc (không xáo trộn)
     if (matchedOnlineAssignment?.mode === 'practice') {
-      return restoreUnshuffledVariant(hydratedBaseVariant, matchedOnlineAssignment?.examData);
+      return normalizeVariantFormulas(
+        restoreUnshuffledVariant(hydratedBaseVariant, effectiveExamData)
+      );
     }
 
     // Chế độ kiểm tra: tự động xáo trộn ngẫu nhiên thứ tự câu hỏi trong mỗi phần
     // và thứ tự đáp án trong mỗi câu (giữ nguyên thứ tự các phần I -> II -> III)
     const effectiveSeed = `${studentId.trim().toUpperCase() || 'GUEST'}-${studentName.trim().toUpperCase() || 'STUDENT'}-${cleanCode.toUpperCase()}-${studentShuffleSeed}`;
-    return shuffleVariantForStudent(hydratedBaseVariant, effectiveSeed);
+    return normalizeVariantFormulas(shuffleVariantForStudent(hydratedBaseVariant, effectiveSeed));
   }, [
     variants,
     selectedCode,
@@ -328,6 +562,70 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
     return gradeStudentExam(activeVariant, answers);
   }, [activeVariant, answers]);
 
+  // Current Exam Session URL & QR Code Generation for Mobile Device Access in Lab
+  const effectiveQrExamCode = useMemo<string>(() => {
+    return (
+      selectedCode.trim() ||
+      (isExamActive && activeVariant?.code ? activeVariant.code.trim() : '') ||
+      matchedOnlineAssignment?.examCode?.trim() ||
+      variants[0]?.code?.trim() ||
+      '1102'
+    );
+  }, [selectedCode, isExamActive, activeVariant, matchedOnlineAssignment, variants]);
+
+  const currentExamSessionUrl = useMemo<string>(() => {
+    const baseOrigin =
+      typeof window !== 'undefined' && window.location?.origin
+        ? `${window.location.origin}${window.location.pathname || '/'}`
+        : 'https://smarttest.edu.vn/';
+    const cleanBase = baseOrigin.endsWith('/') ? baseOrigin : `${baseOrigin}/`;
+    return effectiveQrExamCode
+      ? `${cleanBase}?examCode=${encodeURIComponent(effectiveQrExamCode)}`
+      : cleanBase;
+  }, [effectiveQrExamCode]);
+
+  useEffect(() => {
+    let isMounted = true;
+    QRCode.toDataURL(currentExamSessionUrl, {
+      width: 280,
+      margin: 2,
+      errorCorrectionLevel: 'H',
+      color: {
+        dark: '#1e1b4b',
+        light: '#ffffff',
+      },
+    })
+      .then((url) => {
+        if (isMounted) {
+          setQrCodeDataUrl(url);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setQrCodeDataUrl('');
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [currentExamSessionUrl]);
+
+  const handleCopySessionUrl = useCallback(() => {
+    navigator.clipboard?.writeText(currentExamSessionUrl);
+    setCopiedSessionUrl(true);
+    window.setTimeout(() => setCopiedSessionUrl(false), 2000);
+  }, [currentExamSessionUrl]);
+
+  const handleDownloadQrCode = useCallback(() => {
+    if (!qrCodeDataUrl) return;
+    const link = document.createElement('a');
+    link.href = qrCodeDataUrl;
+    link.download = `SmartTest-QR-MaDe-${effectiveQrExamCode || 'Session'}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [qrCodeDataUrl, effectiveQrExamCode]);
+
   // Helper to log an anti-cheat violation & enforce forced submission in 'exam' mode
   const recordViolation = useCallback(
     (
@@ -335,32 +633,28 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
       description: string,
       openModal: boolean = true
     ) => {
-      const isPracticeMode = matchedOnlineAssignment?.mode === 'practice';
-      if (isPracticeMode && openModal) {
-        // Chế độ ôn tập: Không thu bài cưỡng chế khi chuyển tab / rời màn hình
+      if (isPracticeMode || isSubmitted) {
+        // Chế độ ôn tập hoặc đã nộp bài: Không ghi nhận vi phạm và không thu bài cưỡng chế
         return;
       }
 
       const evt: ViolationEvent = {
-        id: `VIO-${Date.now()}`,
+        id: `VIO-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         timestamp: new Date().toLocaleTimeString('vi-VN'),
         type,
         description,
       };
 
-      const maxAllowed =
-        matchedOnlineAssignment?.mode === 'exam'
-          ? matchedOnlineAssignment.maxViolations || 3
-          : 0;
-      const levelNum = matchedOnlineAssignment?.violationLevel || 2;
-
       setViolations((prev) => {
+        if (maxAllowedViolations > 0 && prev.length >= maxAllowedViolations) {
+          return prev;
+        }
         const nextList = [...prev, evt];
-        if (!isPracticeMode && maxAllowed > 0 && openModal && nextList.length >= maxAllowed) {
+        if (maxAllowedViolations > 0 && nextList.length >= maxAllowedViolations) {
           setIsSubmitted(true);
           setActiveWarningModal(null);
           setForcedSubmitBanner(
-            `Hệ thống đã thu bài cưỡng chế theo cấu hình kỳ thi (Chế độ Kiểm tra · Mức ${levelNum}: Vi phạm ${nextList.length}/${maxAllowed} lần cho phép).`
+            `Hệ thống đã thu bài cưỡng chế theo cấu hình kỳ thi (Chế độ Kiểm tra · Mức ${activeViolationLevel}: Vi phạm ${nextList.length}/${maxAllowedViolations} lần tối đa).`
           );
           setShowScorecardModal(true);
           if (document.fullscreenElement && document.exitFullscreen) {
@@ -369,14 +663,39 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
         } else if (openModal) {
           setActiveWarningModal(evt);
         } else {
-          setSecurityToast(description);
+          setSecurityToast(
+            `${description} (Vi phạm ${nextList.length}/${maxAllowedViolations} lần)`
+          );
           window.setTimeout(() => setSecurityToast(null), 3200);
         }
         return nextList;
       });
     },
-    [matchedOnlineAssignment]
+    [isPracticeMode, isSubmitted, maxAllowedViolations, activeViolationLevel]
   );
+
+  // Enforce automatic forced submission immediately whenever violations reach maxAllowedViolations in Exam mode
+  useEffect(() => {
+    if (!isExamActive || isSubmitted || isPracticeMode) return;
+    if (maxAllowedViolations > 0 && violations.length >= maxAllowedViolations) {
+      setIsSubmitted(true);
+      setActiveWarningModal(null);
+      setForcedSubmitBanner(
+        `Hệ thống đã thu bài cưỡng chế theo cấu hình kỳ thi (Chế độ Kiểm tra · Mức ${activeViolationLevel}: Vi phạm ${violations.length}/${maxAllowedViolations} lần tối đa).`
+      );
+      setShowScorecardModal(true);
+      if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+  }, [
+    isExamActive,
+    isSubmitted,
+    isPracticeMode,
+    maxAllowedViolations,
+    activeViolationLevel,
+    violations.length,
+  ]);
 
   // Request HTML5 Fullscreen safely (handles iframe sandbox permission restrictions gracefully)
   const enterFullscreen = useCallback(async () => {
@@ -437,18 +756,28 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
     onSessionUpdate,
   ]);
 
-  // Countdown Timer
+  // Countdown Timer (with optional soft audio chime at 5-minute mark and upon expiration)
   useEffect(() => {
     if (!isExamActive || isSubmitted) return;
     const interval = window.setInterval(() => {
       setRemainingSeconds((prev) => {
         if (prev <= 1) {
           window.clearInterval(interval);
+          if (audioCueEnabledRef.current) {
+            playExamTimeChime('time_expired');
+          }
           setIsSubmitted(true);
           setShowScorecardModal(true);
           return 0;
         }
-        return prev - 1;
+        const next = prev - 1;
+        if (next === 300 && !fiveMinChimePlayedRef.current) {
+          fiveMinChimePlayedRef.current = true;
+          if (audioCueEnabledRef.current) {
+            playExamTimeChime('five_minutes');
+          }
+        }
+        return next;
       });
     }, 1000);
     return () => window.clearInterval(interval);
@@ -456,7 +785,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
   // Anti-Cheating Event Listeners (Fullscreen, VisibilityChange, Window Blur, ContextMenu, Shortcuts)
   useEffect(() => {
-    if (!isExamActive || isSubmitted) return;
+    if (!isExamActive || isSubmitted || isPracticeMode) return;
 
     const handleVisibilityChange = () => {
       if (document.hidden) {
@@ -546,7 +875,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
       document.removeEventListener('paste', handleCopyCutPaste);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isExamActive, isSubmitted, recordViolation]);
+  }, [isExamActive, isSubmitted, isPracticeMode, recordViolation]);
 
   // Start Fresh or Resume Exam
   const handleStartExam = async (resumeSaved: boolean) => {
@@ -594,12 +923,13 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
       if (savedSeed) {
         setStudentShuffleSeed(savedSeed);
       }
-      setAnswers(detectedSavedSession.answers);
-      setRemainingSeconds(
+      const resumedRemaining =
         detectedSavedSession.remainingSeconds > 0
           ? detectedSavedSession.remainingSeconds
-          : configuredDurationMinutes * 60
-      );
+          : configuredDurationMinutes * 60;
+      fiveMinChimePlayedRef.current = resumedRemaining <= 300;
+      setAnswers(detectedSavedSession.answers);
+      setRemainingSeconds(resumedRemaining);
       setViolations(detectedSavedSession.violations || []);
       setIsSubmitted(detectedSavedSession.isSubmitted);
       setStartedAtIso(detectedSavedSession.startedAt);
@@ -614,15 +944,21 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
       } catch {
         // Ignore storage quota errors
       }
+      const initialSeconds = configuredDurationMinutes * 60;
+      fiveMinChimePlayedRef.current = initialSeconds <= 300;
       setAnswers(EMPTY_ANSWERS);
-      setRemainingSeconds(configuredDurationMinutes * 60);
+      setRemainingSeconds(initialSeconds);
       setViolations([]);
       setIsSubmitted(false);
       setStartedAtIso(new Date().toISOString());
       setShowScorecardModal(false);
     }
 
-    await enterFullscreen();
+    const effectiveMode =
+      matchedOnlineAssignment?.mode || resolvedAssignment?.mode || 'exam';
+    if (effectiveMode !== 'practice') {
+      await enterFullscreen();
+    }
     setIsExamActive(true);
   };
 
@@ -755,8 +1091,8 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   // =========================================================================
   if (!isExamActive) {
     return (
-      <div className="w-full max-w-5xl mx-auto px-3 sm:px-6 py-6 sm:py-10 space-y-6 sm:space-y-8 overflow-x-hidden">
-        <div className="bg-[#18182e] border-2 border-indigo-800/80 rounded-2xl p-5 sm:p-10 shadow-xl space-y-6 sm:space-y-8">
+      <div className="w-full max-w-5xl mx-auto px-3.5 sm:px-6 py-6 sm:py-10 space-y-6 sm:space-y-8 overflow-x-hidden box-border">
+        <div className="bg-[#18182e] border-2 border-indigo-800/80 rounded-2xl p-4 sm:p-10 shadow-xl space-y-6 sm:space-y-8 w-full max-w-full min-w-0 box-border overflow-hidden">
           <div className="flex flex-col items-center text-center space-y-2.5 border-b border-slate-800 pb-6">
             <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white tracking-tight leading-tight">
               Phòng Thi & Kiểm Tra Trực Tuyến — SmartTest
@@ -860,9 +1196,9 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                   {matchedOnlineAssignment.durationMinutes} phút
                 </div>
               </div>
-              <div className="shrink-0">
+              <div className="max-w-full">
                 <span
-                  className={`inline-block px-3 py-1.5 rounded-lg font-mono font-bold ${
+                  className={`inline-block max-w-full break-words px-3 py-1.5 rounded-lg font-mono font-bold ${
                     matchedOnlineAssignment.mode === 'exam'
                       ? 'bg-rose-950/90 text-rose-200 border border-rose-600/60'
                       : 'bg-emerald-950/90 text-emerald-200 border border-emerald-600/60'
@@ -884,35 +1220,122 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               </div>
               <ul className="space-y-2 text-xs sm:text-sm font-bold text-slate-100 leading-relaxed">
                 <li>
-                  · Phần I ({activeVariant?.part1.length || 18} câu trắc nghiệm ABCD): +0,25 điểm / câu đúng.
+                  · Phần I ({activeVariant ? activeVariant.part1.length : 18} câu trắc nghiệm ABCD): +0,25 điểm / câu đúng.
                 </li>
-                <li>
-                  · Phần II ({activeVariant?.part2.length || 4} câu Đúng/Sai): 1 ý đúng = 0,10đ · 2 ý = 0,25đ · 3 ý = 0,50đ · 4 ý = 1,00đ.
-                </li>
-                <li>
-                  · Phần III ({activeVariant?.part3.length || 6} câu trả lời ngắn): +0,25 điểm / đáp số khớp chuẩn.
-                </li>
+                {(!activeVariant || activeVariant.part2.length > 0) && (
+                  <li>
+                    · Phần II ({activeVariant ? activeVariant.part2.length : 4} câu Đúng/Sai): 1 ý đúng = 0,10đ · 2 ý = 0,25đ · 3 ý = 0,50đ · 4 ý = 1,00đ.
+                  </li>
+                )}
+                {(!activeVariant || activeVariant.part3.length > 0) && (
+                  <li>
+                    · Phần III ({activeVariant ? activeVariant.part3.length : 6} câu trả lời ngắn): +0,25 điểm / đáp số khớp chuẩn.
+                  </li>
+                )}
               </ul>
             </div>
 
             <div className="p-5 sm:p-6 rounded-2xl bg-slate-900/90 border-2 border-indigo-900/70 space-y-3 shadow-md">
               <div className="text-sm sm:text-base font-extrabold text-amber-300">
-                Chế Độ Bảo Mật Phòng Máy SmartTest
+                {isPracticeMode
+                  ? 'Chế Độ Ôn Tập & Tự Luyện SmartTest'
+                  : 'Chế Độ Bảo Mật Phòng Máy SmartTest'}
               </div>
               <ul className="space-y-2 text-xs sm:text-sm font-bold text-slate-100 leading-relaxed">
-                <li>
-                  · Tự động kích hoạt Toàn màn hình (Fullscreen) ngay khi bắt đầu làm bài.
-                </li>
-                <li>
-                  ·{' '}
-                  {matchedOnlineAssignment?.mode === 'practice'
-                    ? 'Chế độ Ôn tập: Không thu bài cưỡng chế, mở xem lời giải chi tiết sau khi nộp bài.'
-                    : `Chế độ Kiểm tra (Mức ${matchedOnlineAssignment?.violationLevel || 2}): Tự động thu bài cưỡng chế nếu vi phạm ${matchedOnlineAssignment?.maxViolations || 3} lần.`}
-                </li>
+                {isPracticeMode ? (
+                  <>
+                    <li>
+                      · Không hiển thị thanh Giám sát chống gian lận và không thu bài cưỡng chế khi chuyển tab.
+                    </li>
+                    <li>
+                      · Giữ nguyên thứ tự câu hỏi gốc; mở đầy đủ đáp án và lời giải chi tiết ngay sau khi nộp bài.
+                    </li>
+                  </>
+                ) : (
+                  <>
+                    <li>
+                      · Tự động kích hoạt Toàn màn hình (Fullscreen) và Giám sát chống gian lận ngay khi bắt đầu làm bài.
+                    </li>
+                    <li>
+                      · Chế độ Kiểm tra (Mức {activeViolationLevel}): Tự động thu bài cưỡng chế ngay khi vi phạm đủ {maxAllowedViolations} lần.
+                    </li>
+                  </>
+                )}
                 <li>
                   · Lưu tức thời mọi lựa chọn vào bộ nhớ trình duyệt sau mỗi thao tác.
                 </li>
               </ul>
+            </div>
+          </div>
+
+          {/* Mobile QR Code Quick Access Card in Entrance Gate */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/90 border-2 border-violet-700/60 flex flex-col md:flex-row items-center justify-between gap-4 shadow-md">
+            <div className="flex items-start sm:items-center gap-3.5 min-w-0 w-full md:w-auto">
+              <button
+                type="button"
+                onClick={() => setShowQrModal(true)}
+                title="Phóng to mã QR phòng thi"
+                className="p-2 rounded-xl bg-white border-2 border-indigo-400 shadow-sm shrink-0 hover:scale-105 transition-transform cursor-pointer"
+              >
+                {qrCodeDataUrl ? (
+                  <img
+                    src={qrCodeDataUrl}
+                    alt={`Mã QR phòng thi ${effectiveQrExamCode}`}
+                    className="w-16 h-16 sm:w-20 sm:h-20 object-contain rounded"
+                  />
+                ) : (
+                  <div className="w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center text-indigo-900">
+                    <QrCode className="w-10 h-10" />
+                  </div>
+                )}
+              </button>
+
+              <div className="space-y-1.5 min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-violet-600/30 border border-violet-500/60 text-violet-200 text-xs font-mono font-bold">
+                    <Smartphone className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+                    <span>VÀO THI BẰNG ĐIỆN THOẠI (QR CODE)</span>
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/50 text-amber-300 font-mono text-xs font-extrabold">
+                    Mã bài thi: {effectiveQrExamCode}
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm font-semibold text-slate-200 leading-snug">
+                  Quét mã QR bằng camera điện thoại để mở trực tiếp phòng thi với mã đề hiện tại trong phòng máy.
+                </p>
+                <div className="text-[11px] sm:text-xs font-mono text-indigo-300 truncate max-w-full">
+                  {currentExamSessionUrl}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end shrink-0">
+              <button
+                type="button"
+                onClick={handleCopySessionUrl}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 transition-colors whitespace-nowrap"
+              >
+                {copiedSessionUrl ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span className="text-emerald-300">Đã sao chép Link</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 shrink-0" />
+                    <span>Sao chép Link</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowQrModal(true)}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-extrabold text-white shadow-sm transition-colors whitespace-nowrap"
+              >
+                <QrCode className="w-4 h-4 shrink-0" />
+                <span>Hiển Thị Mã QR Lớn</span>
+              </button>
             </div>
           </div>
 
@@ -942,6 +1365,85 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Enlarged QR Code Modal (Accessible from Entrance Gate) */}
+        {showQrModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+            <div className="max-w-md w-full rounded-2xl bg-[#18182e] border-2 border-violet-500/80 p-6 shadow-2xl space-y-5 text-center relative">
+              <button
+                type="button"
+                onClick={() => setShowQrModal(false)}
+                className="absolute top-4 right-4 p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                aria-label="Đóng cửa sổ QR"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="space-y-1.5">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-violet-600/30 border border-violet-500/50 text-violet-200 text-xs font-mono font-bold">
+                  <QrCode className="w-3.5 h-3.5" />
+                  <span>MÃ QR VÀO PHÒNG THI TRỰC TUYẾN</span>
+                </div>
+                <h3 className="text-xl font-extrabold text-white">
+                  Mã Bài Thi: <span className="font-mono text-amber-300">{effectiveQrExamCode}</span>
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300">
+                  Học sinh dùng camera điện thoại hoặc Zalo quét mã QR bên dưới để truy cập thẳng vào bài thi.
+                </p>
+              </div>
+
+              <div className="mx-auto w-64 h-64 p-4 rounded-2xl bg-white border-4 border-violet-500/80 shadow-xl flex items-center justify-center">
+                {qrCodeDataUrl ? (
+                  <img
+                    src={qrCodeDataUrl}
+                    alt={`QR Code Mã đề ${effectiveQrExamCode}`}
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <QrCode className="w-24 h-24 text-indigo-950 animate-pulse" />
+                )}
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-left space-y-1">
+                <div className="text-[11px] font-mono uppercase text-slate-400 font-bold">
+                  Đường dẫn phiên thi (Session URL):
+                </div>
+                <div className="text-xs font-mono text-indigo-300 break-all select-all">
+                  {currentExamSessionUrl}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={handleCopySessionUrl}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs sm:text-sm font-bold text-slate-100 border border-slate-700 transition-colors"
+                >
+                  {copiedSessionUrl ? (
+                    <>
+                      <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span className="text-emerald-300">Đã Sao Chép</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4 shrink-0" />
+                      <span>Sao Chép Link</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadQrCode}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-xs sm:text-sm font-bold text-white shadow-md transition-colors"
+                >
+                  <Download className="w-4 h-4 shrink-0" />
+                  <span>Tải Ảnh QR</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -951,52 +1453,54 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
   // =========================================================================
   const p1Count = activeVariant.part1.length;
   const p2Count = activeVariant.part2.length;
+  const p3Count = activeVariant.part3.length;
   const isLowTime = remainingSeconds < 300 && !isSubmitted;
   const isIvory = paperTheme === 'ivory';
 
   return (
-    <div className="w-full select-none">
+    <div className="w-full max-w-full min-w-0 overflow-x-hidden select-none box-border">
       {/* Fixed Viewport Split Workspace on Desktop/Tablet (md+):
           Top Header Bar & Right Status Column stay 100% fixed; ONLY Left Question List scrolls */}
       <div
         style={{ top: `${headerOffsetPx}px` }}
-        className="w-full md:fixed md:inset-x-0 md:bottom-0 md:z-30 bg-[#0b0f19] flex flex-col md:overflow-hidden"
+        className="print-exam-workspace w-full max-w-full min-w-0 overflow-x-hidden md:fixed md:inset-x-0 md:bottom-0 md:z-30 bg-[#0b0f19] flex flex-col md:overflow-hidden box-border"
       >
-        <div className="w-full max-w-[1440px] mx-auto px-2.5 sm:px-5 pt-2 sm:pt-2.5 pb-2 sm:pb-3 flex-1 min-h-0 flex flex-col gap-2.5 sm:gap-3">
-          {/* Fixed Top Exam Bar (Student Info + Action Controls + Progress Bar) */}
+        <div className="print-exam-inner w-full max-w-[1600px] min-w-0 overflow-x-hidden box-border mx-auto px-3.5 sm:px-4 pt-1.5 sm:pt-2 pb-1.5 sm:pb-2.5 flex-1 min-h-0 flex flex-col gap-2">
+          {/* Ultra-Compact Fixed Top Exam Bar (Student Info + Action Controls + Progress Bar) */}
           <div
             onWheel={handleForwardWheelToQuestions}
-            className="shrink-0 sticky top-[52px] md:static z-30 px-3 sm:px-4 py-2 rounded-xl bg-[#18182e]/95 backdrop-blur-md border-2 border-indigo-800/80 shadow-md space-y-1.5"
+            className="print-exam-topbar shrink-0 w-full max-w-full min-w-0 box-border overflow-hidden relative md:static z-20 px-3 sm:px-3.5 py-2 sm:py-1.5 rounded-xl bg-[#18182e]/95 backdrop-blur-md border-2 border-indigo-800/80 shadow-md space-y-1.5"
           >
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
-                <span className="font-extrabold text-white flex items-center gap-1.5">
-                  <UserCheck className="w-4 h-4 text-violet-400 shrink-0" />
-                  <span>{studentName}</span>
+            <div className="flex flex-wrap items-center justify-between gap-1.5 min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-[11px] sm:text-xs min-w-0 max-w-full">
+                <span className="font-extrabold text-white flex items-center gap-1 min-w-0">
+                  <UserCheck className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                  <span className="truncate max-w-[115px] sm:max-w-none">{studentName}</span>
                 </span>
                 <span aria-hidden="true" className="text-slate-500">·</span>
-                <span className="font-mono font-bold text-slate-200">SBD: {studentId}</span>
+                <span className="font-mono font-bold text-slate-200 whitespace-nowrap">SBD: {studentId}</span>
                 <span aria-hidden="true" className="text-slate-500">·</span>
-                <span className="font-mono font-extrabold text-violet-300">Mã đề {activeVariant.code}</span>
-                <span aria-hidden="true" className="text-slate-500">·</span>
-                <span className="font-mono font-bold text-emerald-400">
+                <span className="font-mono font-extrabold text-violet-300 whitespace-nowrap">Mã đề {activeVariant.code}</span>
+                <span aria-hidden="true" className="text-slate-500 hidden lg:inline">·</span>
+                <span className="font-mono font-bold text-emerald-400 hidden lg:inline">
                   {lastSavedTime ? `Đã lưu tự động lúc ${lastSavedTime}` : 'Đang đồng bộ LocalStorage...'}
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <div className="no-print flex flex-wrap items-center gap-1 sm:gap-1.5 max-w-full">
                 {/* Paper Surface Contrast Switcher */}
                 <button
                   type="button"
                   onClick={() => setPaperTheme((t) => (t === 'ivory' ? 'dark' : 'ivory'))}
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  className="flex items-center gap-1 px-2 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
                 >
-                  {isIvory ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
-                  <span>{isIvory ? 'Nền Giấy Tối' : 'Nền Giấy Trắng Ngà'}</span>
+                  {isIvory ? <Moon className="w-3 h-3 shrink-0" /> : <Sun className="w-3 h-3 shrink-0" />}
+                  <span className="hidden sm:inline">{isIvory ? 'Nền Giấy Tối' : 'Nền Giấy Trắng Ngà'}</span>
+                  <span className="sm:hidden">{isIvory ? 'Nền Giấy Tối' : 'Nền Giấy Sáng'}</span>
                 </button>
 
-                {/* Simulate Tab Switch button for easy evaluator verification */}
-                {!isSubmitted && (
+                {/* Simulate Tab Switch button for easy evaluator verification (Exam Mode only) */}
+                {!isSubmitted && !isPracticeMode && (
                   <button
                     type="button"
                     onClick={() =>
@@ -1006,20 +1510,21 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                         true
                       )
                     }
-                    className="px-2.5 py-1 text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white border border-amber-500 rounded-lg transition-colors whitespace-nowrap shrink-0 shadow-xs"
+                    className="px-2 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white border border-amber-500 rounded-lg transition-colors whitespace-nowrap shrink-0 shadow-xs"
                   >
-                    Thử Cảnh Báo Chuyển Tab
+                    <span className="hidden sm:inline">Thử Cảnh Báo Chuyển Tab</span>
+                    <span className="sm:hidden">Thử Cảnh Báo</span>
                   </button>
                 )}
 
-                {!isFullscreenActive && !isSubmitted && (
+                {!isFullscreenActive && !isSubmitted && !isPracticeMode && (
                   <button
                     type="button"
                     onClick={enterFullscreen}
-                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="hidden sm:flex items-center gap-1 px-2 py-1 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
                   >
-                    <Maximize2 className="w-3.5 h-3.5" />
-                    <span>Bật Lại Toàn Màn Hình</span>
+                    <Maximize2 className="w-3 h-3" />
+                    <span>Toàn Màn Hình</span>
                   </button>
                 )}
 
@@ -1027,7 +1532,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowScorecardModal(true)}
-                    className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
+                    className="flex items-center gap-1 px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors whitespace-nowrap shrink-0"
                   >
                     <Award className="w-3.5 h-3.5" />
                     <span>Xem Bảng Điểm Chi Tiết</span>
@@ -1036,10 +1541,20 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setIsExamActive(false)}
-                  className="px-2.5 py-1 text-xs font-bold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                  onClick={() => setShowQrModal(true)}
+                  title="Hiển thị mã QR đường dẫn phiên thi cho thiết bị di động"
+                  className="flex items-center gap-1 px-2 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold bg-indigo-950/90 hover:bg-indigo-900 text-violet-200 border border-violet-500/60 rounded-lg transition-colors whitespace-nowrap shrink-0"
                 >
-                  Đổi Thí Sinh / Mã Đề
+                  <QrCode className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+                  <span>Mã QR</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsExamActive(false)}
+                  className="px-2 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                >
+                  <span>Đổi Thí Sinh / Mã Đề</span>
                 </button>
               </div>
             </div>
@@ -1054,31 +1569,32 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               part2Completed={partCompletionStats.p2Done}
               part2Total={p2Count}
               part3Completed={partCompletionStats.p3Done}
-              part3Total={activeVariant.part3.length}
+              part3Total={p3Count}
             />
           </div>
 
-          {/* Main Split Grid: 70% Left Independent Scrollable Exam Questions / 30% Right Fixed Palette */}
-          <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-3.5 lg:gap-5 items-start md:items-stretch w-full max-w-full">
+          {/* Main Split Grid: ~74-75% Left Independent Scrollable Exam Questions / ~25-26% Right Fixed Palette */}
+          <div className="print-exam-split-grid flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[minmax(0,2.7fr)_minmax(248px,1fr)] lg:grid-cols-[minmax(0,3fr)_minmax(268px,1fr)] gap-3 lg:gap-4 items-start md:items-stretch w-full max-w-full min-w-0 overflow-x-hidden box-border">
             {/* ===================================================================
-                LEFT PANE (70% -> 8 of 12 columns): INDEPENDENTLY SCROLLABLE EXAM QUESTIONS & ANSWERS
+                LEFT PANE (74%-75% WIDTH): INDEPENDENTLY SCROLLABLE EXAM QUESTIONS & ANSWERS
             =================================================================== */}
             <div
               ref={questionsContainerRef}
-              className="md:col-span-8 md:h-full md:overflow-y-auto md:pr-2 space-y-5 sm:space-y-6 pb-6 min-w-0 w-full max-w-full"
+              className="print-questions-column md:h-full md:overflow-y-auto overflow-x-hidden md:pr-1.5 space-y-4 sm:space-y-5 pb-6 min-w-0 w-full max-w-full box-border"
             >
           {/* PART I SECTION */}
-          <section className="space-y-4 sm:space-y-5">
-            <div className="px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
-              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug">
+          {p1Count > 0 && (
+          <section className="print-exam-section space-y-4 sm:space-y-5 w-full max-w-full min-w-0 box-border">
+            <div className="print-section-banner w-full max-w-full min-w-0 box-border overflow-hidden px-3.5 sm:px-6 py-3 sm:py-3.5 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
+              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug break-words">
                 PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (Từ câu 1 đến câu {p1Count})
               </h2>
-              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed">
+              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed break-words">
                 Mỗi câu hỏi thí sinh chỉ chọn một phương án đúng nhất. Mỗi câu trả lời đúng được <span className="font-mono font-extrabold text-emerald-400">0,25 điểm</span>.
               </p>
             </div>
 
-            <div className="space-y-4 sm:space-y-5">
+            <div className="space-y-4 sm:space-y-5 w-full max-w-full min-w-0">
               {activeVariant.part1.map((q, idx) => {
                 const globalNum = idx + 1;
                 const selectedOpt = answers.part1[q.id];
@@ -1091,25 +1607,29 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`scroll-mt-36 rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
+                    className={`print-question-card scroll-mt-36 rounded-xl border-2 p-3.5 sm:p-6 transition-colors space-y-3.5 sm:space-y-5 min-w-0 w-full max-w-full box-border overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
                     }`}
                   >
                     {/* Question Header */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3.5 border-slate-200/80 dark:border-slate-800">
-                      <div className="flex items-center gap-3">
+                    <div
+                      className={`flex flex-wrap items-center justify-between gap-2 sm:gap-3 border-b pb-3 ${
+                        isIvory ? 'border-slate-200' : 'border-slate-800'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5 min-w-0">
                         <span
-                          className={`font-mono text-xl font-bold ${
+                          className={`font-mono text-lg sm:text-xl font-bold whitespace-nowrap shrink-0 ${
                             isIvory ? 'text-[#4338ca]' : 'text-violet-400'
                           }`}
                         >
                           Câu {globalNum}
                         </span>
-                        <span aria-hidden="true" className="text-slate-400">·</span>
+                        <span aria-hidden="true" className="text-slate-400 shrink-0">·</span>
                         <span
-                          className={`text-sm sm:text-base font-medium ${
+                          className={`text-xs sm:text-base font-medium ${
                             isIvory ? 'text-slate-600' : 'text-slate-300'
                           }`}
                         >
@@ -1120,7 +1640,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       <button
                         type="button"
                         onClick={() => handleToggleFlag(globalNum)}
-                        className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        className={`no-print flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                           isFlagged
                             ? 'bg-amber-500 text-slate-950 font-semibold'
                             : isIvory
@@ -1128,13 +1648,13 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                             : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
                         }`}
                       >
-                        <Flag className="w-4 h-4" />
+                        <Flag className="w-4 h-4 shrink-0" />
                         <span>{isFlagged ? 'Đã đánh dấu xem lại' : 'Đánh dấu'}</span>
                       </button>
                     </div>
 
                     {/* Question Stem */}
-                    <div className="text-lg sm:text-xl leading-relaxed font-medium">
+                    <div className="text-lg sm:text-xl leading-relaxed font-medium break-words">
                       <MathText text={q.question} />
                     </div>
 
@@ -1149,15 +1669,15 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                         <div className="my-2 p-3.5 rounded-xl bg-white border border-indigo-300/70 flex flex-col items-center justify-center shadow-xs">
                           <img
                             src={resolvedImgUrl}
-                            alt={`Hình minh họa Câu ${globalNum} (Phần I · Câu ${q.displayNumber})`}
-                            className="max-h-64 w-auto object-contain rounded-lg"
+                            alt={`Hình minh họa Câu ${globalNum}`}
+                            className="max-h-64 max-w-full w-auto object-contain rounded-lg"
                           />
                         </div>
                       );
                     })()}
 
                     {/* 4 Clickable Option Cards */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-3.5 min-w-0 w-full max-w-full">
                       {q.options.map((optText, oIdx) => {
                         const isSelected = selectedOpt === oIdx;
                         const isCorrectAnswer = isSubmitted && oIdx === q.correctIndex;
@@ -1167,11 +1687,13 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                         let cardClasses = '';
                         if (isSubmitted) {
                           if (isCorrectAnswer) {
-                            cardClasses =
-                              'bg-emerald-500/15 border-emerald-600 text-emerald-950 dark:text-emerald-100';
+                            cardClasses = isIvory
+                              ? 'bg-emerald-50 border-emerald-600 text-emerald-950 shadow-xs'
+                              : 'bg-emerald-950/60 border-emerald-500 text-emerald-100';
                           } else if (isWrongSelection) {
-                            cardClasses =
-                              'bg-rose-500/15 border-rose-600 text-rose-950 dark:text-rose-100';
+                            cardClasses = isIvory
+                              ? 'bg-rose-50 border-rose-600 text-rose-950 shadow-xs'
+                              : 'bg-rose-950/60 border-rose-500 text-rose-100';
                           } else {
                             cardClasses = isIvory
                               ? 'bg-white border-slate-200 text-slate-700 opacity-75'
@@ -1193,7 +1715,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                             type="button"
                             disabled={isSubmitted}
                             onClick={() => handleSelectPart1(q.id, oIdx)}
-                            className={`w-full text-left p-4 rounded-xl border-2 transition-all flex items-start gap-3.5 ${cardClasses}`}
+                            className={`w-full max-w-full min-w-0 overflow-hidden text-left p-3.5 sm:p-4 rounded-xl border-2 transition-all flex items-start gap-2.5 sm:gap-3.5 ${cardClasses}`}
                           >
                             <input
                               type="radio"
@@ -1212,7 +1734,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                             >
                               {optionLetters[oIdx]}.
                             </span>
-                            <div className="text-base sm:text-lg font-medium leading-relaxed flex-1">
+                            <div className="text-base sm:text-lg font-medium leading-relaxed flex-1 min-w-0 break-words">
                               <MathText text={optText} />
                             </div>
                           </button>
@@ -1223,16 +1745,25 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     {/* Show Explanation After Submission */}
                     {isSubmitted && (
                       <div
-                        className={`p-4 rounded-lg text-sm sm:text-base leading-relaxed border ${
+                        className={`p-4 rounded-lg text-sm sm:text-base leading-relaxed border whitespace-pre-line ${
                           isIvory
-                            ? 'bg-indigo-50/70 border-indigo-200 text-slate-800'
-                            : 'bg-slate-900/90 border-slate-800 text-slate-300'
+                            ? 'bg-indigo-50/80 border-indigo-300 text-slate-900'
+                            : 'bg-slate-900/90 border-slate-800 text-slate-200'
                         }`}
                       >
-                        <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                        <span
+                          className={`font-bold ${
+                            isIvory ? 'text-indigo-800' : 'text-indigo-300'
+                          }`}
+                        >
                           Đáp án đúng: {optionLetters[q.correctIndex]} — Giải thích:{' '}
                         </span>
-                        <MathText text={q.explanation} />
+                        <MathText
+                          text={formatCleanExplanation(
+                            q.explanation,
+                            optionLetters[q.correctIndex]
+                          )}
+                        />
                       </div>
                     )}
                   </div>
@@ -1240,19 +1771,21 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               })}
             </div>
           </section>
+          )}
 
           {/* PART II SECTION */}
-          <section className="space-y-4 sm:space-y-5">
-            <div className="px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
-              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug">
+          {p2Count > 0 && (
+          <section className="print-exam-section space-y-4 sm:space-y-5 w-full max-w-full min-w-0 box-border">
+            <div className="print-section-banner w-full max-w-full min-w-0 box-border overflow-hidden px-3.5 sm:px-6 py-3 sm:py-3.5 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
+              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug break-words">
                 PHẦN II. Câu trắc nghiệm đúng sai (Từ câu {p1Count + 1} đến câu {p1Count + p2Count})
               </h2>
-              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed">
+              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed break-words">
                 Trong mỗi ý <span className="font-mono font-extrabold text-violet-300">a), b), c), d)</span> ở mỗi câu, thí sinh chọn <span className="font-extrabold text-emerald-400">[ĐÚNG]</span> hoặc <span className="font-extrabold text-rose-400">[SAI]</span>. Điểm từng câu: <span className="font-bold text-white">1 ý đúng = 0,10đ · 2 ý đúng = 0,25đ · 3 ý đúng = 0,50đ · 4 ý đúng = 1,00đ</span>.
               </p>
             </div>
 
-            <div className="space-y-4 sm:space-y-5">
+            <div className="space-y-4 sm:space-y-5 w-full max-w-full min-w-0">
               {activeVariant.part2.map((q, idx) => {
                 const globalNum = p1Count + idx + 1;
                 const userSubMap = answers.part2[q.id] || {
@@ -1275,22 +1808,26 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`scroll-mt-36 rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
+                    className={`print-question-card scroll-mt-36 rounded-xl border-2 p-3.5 sm:p-6 transition-colors space-y-3.5 sm:space-y-5 min-w-0 w-full max-w-full box-border overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
                     }`}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2.5 border-b pb-3 border-slate-200/80 dark:border-slate-800">
-                      <div className="flex flex-wrap items-center gap-2">
+                    <div
+                      className={`flex flex-wrap items-center justify-between gap-2 sm:gap-3 border-b pb-3 ${
+                        isIvory ? 'border-slate-200' : 'border-slate-800'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5 min-w-0">
                         <span
-                          className={`font-mono text-lg sm:text-xl font-bold ${
+                          className={`font-mono text-lg sm:text-xl font-bold whitespace-nowrap shrink-0 ${
                             isIvory ? 'text-[#4338ca]' : 'text-violet-400'
                           }`}
                         >
-                          Câu {globalNum} (Phần II · Câu {q.displayNumber})
+                          Câu {globalNum}
                         </span>
-                        <span aria-hidden="true" className="text-slate-400 hidden sm:inline">·</span>
+                        <span aria-hidden="true" className="text-slate-400 shrink-0">·</span>
                         <span
                           className={`text-xs sm:text-base font-medium font-mono ${
                             isIvory ? 'text-slate-600' : 'text-slate-300'
@@ -1303,7 +1840,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       <button
                         type="button"
                         onClick={() => handleToggleFlag(globalNum)}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        className={`no-print flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                           isFlagged
                             ? 'bg-amber-500 text-slate-950 font-semibold'
                             : isIvory
@@ -1311,7 +1848,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                             : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
                         }`}
                       >
-                        <Flag className="w-4 h-4" />
+                        <Flag className="w-4 h-4 shrink-0" />
                         <span>{isFlagged ? 'Đã đánh dấu xem lại' : 'Đánh dấu'}</span>
                       </button>
                     </div>
@@ -1332,7 +1869,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                         <div className="my-2 p-3 rounded-xl bg-white border border-indigo-300/70 flex flex-col items-center justify-center shadow-xs">
                           <img
                             src={resolvedImgUrl}
-                            alt={`Hình minh họa Câu ${globalNum} (Phần II · Câu ${q.displayNumber})`}
+                            alt={`Hình minh họa Câu ${globalNum}`}
                             className="max-h-64 max-w-full w-auto object-contain rounded-lg"
                           />
                         </div>
@@ -1387,17 +1924,37 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                                 </div>
 
                                 {isSubmitted && (
-                                  <div className="mt-2 p-2.5 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-xs sm:text-sm space-y-1 break-words">
+                                  <div
+                                    className={`mt-2 p-2.5 rounded-lg border text-xs sm:text-sm space-y-1 break-words ${
+                                      isIvory
+                                        ? 'bg-indigo-50/90 border-indigo-300 text-slate-900'
+                                        : 'bg-indigo-950/50 border-indigo-500/40 text-slate-100'
+                                    }`}
+                                  >
                                     <div className="font-mono font-bold flex flex-wrap items-center gap-2">
-                                      <span className={stmt.isTrue ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}>
+                                      <span
+                                        className={
+                                          stmt.isTrue
+                                            ? isIvory
+                                              ? 'text-emerald-700'
+                                              : 'text-emerald-400'
+                                            : isIvory
+                                            ? 'text-rose-700'
+                                            : 'text-rose-400'
+                                        }
+                                      >
                                         Đáp án chuẩn: {stmt.isTrue ? 'ĐÚNG' : 'SAI'}
                                       </span>
                                       {currentVal !== null && (
                                         <span
-                                          className={`px-1.5 py-0.5 rounded text-[11px] font-bold ${
+                                          className={`px-1.5 py-0.5 rounded text-[11px] font-bold border ${
                                             currentVal === stmt.isTrue
-                                              ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 border border-emerald-500/40'
-                                              : 'bg-rose-500/20 text-rose-600 dark:text-rose-300 border border-rose-500/40'
+                                              ? isIvory
+                                                ? 'bg-emerald-100 text-emerald-900 border-emerald-400'
+                                                : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                                              : isIvory
+                                              ? 'bg-rose-100 text-rose-900 border-rose-400'
+                                              : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
                                           }`}
                                         >
                                           {currentVal === stmt.isTrue ? '✓ Trả lời đúng' : '✕ Trả lời sai'}
@@ -1405,8 +1962,18 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                                       )}
                                     </div>
                                     {stmt.explanation && (
-                                      <div className="text-slate-700 dark:text-slate-200 leading-relaxed pt-0.5">
-                                        <span className="font-semibold text-indigo-600 dark:text-indigo-300">Giải thích: </span>
+                                      <div
+                                        className={`leading-relaxed pt-0.5 ${
+                                          isIvory ? 'text-slate-800' : 'text-slate-200'
+                                        }`}
+                                      >
+                                        <span
+                                          className={`font-semibold ${
+                                            isIvory ? 'text-indigo-800' : 'text-indigo-300'
+                                          }`}
+                                        >
+                                          Giải thích:{' '}
+                                        </span>
                                         <MathText text={stmt.explanation} />
                                       </div>
                                     )}
@@ -1467,11 +2034,25 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       </div>
 
                       {isSubmitted && q.explanation && (
-                        <div className="mt-2 p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-xs sm:text-sm space-y-1.5 whitespace-pre-line">
-                          <div className="font-mono font-bold text-indigo-600 dark:text-indigo-300">
+                        <div
+                          className={`mt-2 p-3.5 rounded-xl border text-xs sm:text-sm space-y-1.5 whitespace-pre-line ${
+                            isIvory
+                              ? 'bg-indigo-50/90 border-indigo-300 text-slate-900'
+                              : 'bg-indigo-950/50 border-indigo-500/40 text-slate-100'
+                          }`}
+                        >
+                          <div
+                            className={`font-mono font-bold ${
+                              isIvory ? 'text-indigo-800' : 'text-indigo-300'
+                            }`}
+                          >
                             Tổng hợp đáp án &amp; lời giải chi tiết Câu {globalNum}:
                           </div>
-                          <div className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                          <div
+                            className={`leading-relaxed ${
+                              isIvory ? 'text-slate-800' : 'text-slate-200'
+                            }`}
+                          >
                             <MathText text={q.explanation} />
                           </div>
                         </div>
@@ -1482,19 +2063,21 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               })}
             </div>
           </section>
+          )}
 
           {/* PART III SECTION */}
-          <section className="space-y-4 sm:space-y-5">
-            <div className="px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
-              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug">
+          {p3Count > 0 && (
+          <section className="print-exam-section space-y-4 sm:space-y-5 w-full max-w-full min-w-0 box-border">
+            <div className="print-section-banner w-full max-w-full min-w-0 box-border overflow-hidden px-3.5 sm:px-6 py-3 sm:py-3.5 rounded-xl bg-indigo-950/90 border-2 border-violet-500/70 shadow-sm space-y-1">
+              <h2 className="text-base sm:text-xl font-extrabold text-white leading-snug break-words">
                 PHẦN III. Câu trắc nghiệm trả lời ngắn (Từ câu {p1Count + p2Count + 1} đến câu {totalQuestionCount})
               </h2>
-              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed">
+              <p className="text-xs sm:text-base font-semibold text-slate-200 leading-relaxed break-words">
                 Thí sinh nhập kết quả là số (chấp nhận cả dấu phẩy <span className="font-mono font-bold">,</span> hoặc dấu chấm <span className="font-mono font-bold">.</span> thập phân). Mỗi câu đúng được <span className="font-mono font-extrabold text-emerald-400">0,25 điểm</span>.
               </p>
             </div>
 
-            <div className="space-y-4 sm:space-y-5">
+            <div className="space-y-4 sm:space-y-5 w-full max-w-full min-w-0">
               {activeVariant.part3.map((q, idx) => {
                 const globalNum = p1Count + p2Count + idx + 1;
                 const val = answers.part3[q.id] || '';
@@ -1507,24 +2090,28 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     ref={(el) => {
                       questionRefs.current[globalNum] = el;
                     }}
-                    className={`scroll-mt-36 rounded-xl border-2 p-4 sm:p-6 transition-colors space-y-4 sm:space-y-5 min-w-0 w-full max-w-full overflow-hidden ${
+                    className={`print-question-card scroll-mt-36 rounded-xl border-2 p-3.5 sm:p-6 transition-colors space-y-3.5 sm:space-y-5 min-w-0 w-full max-w-full box-border overflow-hidden ${
                       isIvory
                         ? 'bg-[#fcfbfe] text-slate-900 border-[#4338ca]/35'
                         : 'bg-[#18182e] text-slate-100 border-indigo-900/80'
                     }`}
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3.5 border-slate-200/80 dark:border-slate-800">
-                      <div className="flex items-center gap-3">
+                    <div
+                      className={`flex flex-wrap items-center justify-between gap-2 sm:gap-3 border-b pb-3 ${
+                        isIvory ? 'border-slate-200' : 'border-slate-800'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5 min-w-0">
                         <span
-                          className={`font-mono text-xl font-bold ${
+                          className={`font-mono text-lg sm:text-xl font-bold whitespace-nowrap shrink-0 ${
                             isIvory ? 'text-[#4338ca]' : 'text-violet-400'
                           }`}
                         >
-                          Câu {globalNum} (Phần III · Câu {q.displayNumber})
+                          Câu {globalNum}
                         </span>
-                        <span aria-hidden="true" className="text-slate-400">·</span>
+                        <span aria-hidden="true" className="text-slate-400 shrink-0">·</span>
                         <span
-                          className={`text-sm sm:text-base font-medium ${
+                          className={`text-xs sm:text-base font-medium ${
                             isIvory ? 'text-slate-600' : 'text-slate-300'
                           }`}
                         >
@@ -1535,7 +2122,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       <button
                         type="button"
                         onClick={() => handleToggleFlag(globalNum)}
-                        className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        className={`no-print flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
                           isFlagged
                             ? 'bg-amber-500 text-slate-950 font-semibold'
                             : isIvory
@@ -1543,12 +2130,12 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                             : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
                         }`}
                       >
-                        <Flag className="w-4 h-4" />
+                        <Flag className="w-4 h-4 shrink-0" />
                         <span>{isFlagged ? 'Đã đánh dấu xem lại' : 'Đánh dấu'}</span>
                       </button>
                     </div>
 
-                    <div className="text-lg sm:text-xl leading-relaxed font-medium">
+                    <div className="text-lg sm:text-xl leading-relaxed font-medium break-words">
                       <MathText text={q.question} />
                     </div>
 
@@ -1563,8 +2150,8 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                         <div className="my-2 p-3.5 rounded-xl bg-white border border-indigo-300/70 flex flex-col items-center justify-center shadow-xs">
                           <img
                             src={resolvedImgUrl}
-                            alt={`Hình minh họa Câu ${globalNum} (Phần III · Câu ${q.displayNumber})`}
-                            className="max-h-64 w-auto object-contain rounded-lg"
+                            alt={`Hình minh họa Câu ${globalNum}`}
+                            className="max-h-64 max-w-full w-auto object-contain rounded-lg"
                           />
                         </div>
                       );
@@ -1573,7 +2160,11 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     {/* Standardized Short Answer Input + On-Screen Numeric Keypad Toggle */}
                     <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 pt-1">
                       <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
-                        <label className="text-sm sm:text-base font-bold font-mono uppercase tracking-wider text-[#4338ca] dark:text-violet-300">
+                        <label
+                          className={`text-sm sm:text-base font-bold font-mono uppercase tracking-wider ${
+                            isIvory ? 'text-[#4338ca]' : 'text-violet-300'
+                          }`}
+                        >
                           Đáp số của bạn:
                         </label>
                         <input
@@ -1700,11 +2291,15 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       <div
                         className={`p-4 rounded-lg text-sm sm:text-base leading-relaxed border ${
                           isIvory
-                            ? 'bg-indigo-50/70 border-indigo-200 text-slate-800'
-                            : 'bg-slate-900/90 border-slate-800 text-slate-300'
+                            ? 'bg-indigo-50/80 border-indigo-300 text-slate-900'
+                            : 'bg-slate-900/90 border-slate-800 text-slate-200'
                         }`}
                       >
-                        <span className="font-bold text-indigo-600 dark:text-indigo-400">
+                        <span
+                          className={`font-bold ${
+                            isIvory ? 'text-indigo-800' : 'text-indigo-300'
+                          }`}
+                        >
                           Đáp số chuẩn: {q.answer} {q.unit ? `(${q.unit})` : ''} — Giải thích:{' '}
                         </span>
                         <MathText text={q.explanation} />
@@ -1715,38 +2310,63 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               })}
             </div>
           </section>
+          )}
         </div>
 
             {/* ===================================================================
-                RIGHT PANE (30% -> 4 of 12 columns): FIXED STATIONARY STATUS & NAVIGATION PALETTE
+                RIGHT PANE (~25-26% WIDTH): FIXED STATIONARY STATUS & NAVIGATION PALETTE
             =================================================================== */}
             <aside
               onWheel={handleForwardWheelToQuestions}
-              className="md:col-span-4 md:h-full md:overflow-y-auto flex flex-col gap-2.5"
+              className="no-print w-full max-w-full min-w-0 box-border md:h-full md:overflow-y-auto flex flex-col gap-2"
             >
               {/* Compact High-visibility Countdown Timer Card */}
               <div
-                className={`shrink-0 rounded-xl border-2 p-2.5 sm:p-3 space-y-1.5 transition-colors shadow-md ${
+                className={`shrink-0 w-full max-w-full min-w-0 box-border overflow-hidden rounded-xl border-2 p-3 sm:p-3 space-y-1.5 transition-colors shadow-md ${
                   isLowTime
                     ? 'bg-rose-950/90 border-rose-500 text-rose-100 animate-pulse'
                     : 'bg-[#18182e] border-indigo-800/80 text-white'
                 }`}
               >
-                <div className="flex items-center justify-between gap-2 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
                   <span className="font-extrabold flex items-center gap-1.5 text-slate-200">
                     <Clock className="w-3.5 h-3.5 text-violet-400 shrink-0" />
                     <span>THỜI GIAN CÒN LẠI</span>
                   </span>
-                  <span className="font-mono text-xs sm:text-sm font-extrabold text-violet-300">
-                    Mã đề {activeVariant.code}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleToggleAudioCue}
+                      title={
+                        audioCueEnabled
+                          ? 'Chuông báo giờ (5 phút cuối & hết giờ): Đang BẬT — Nhấn để tắt'
+                          : 'Chuông báo giờ (5 phút cuối & hết giờ): Đang TẮT — Nhấn để bật'
+                      }
+                      aria-label="Bật hoặc tắt chuông báo thời gian làm bài"
+                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px] font-bold border transition-colors whitespace-nowrap shrink-0 ${
+                        audioCueEnabled
+                          ? 'bg-violet-950/80 border-violet-500/70 text-violet-200 hover:bg-violet-900/80'
+                          : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {audioCueEnabled ? (
+                        <Volume2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                      ) : (
+                        <VolumeX className="w-3 h-3 text-slate-400 shrink-0" />
+                      )}
+                      <span>{audioCueEnabled ? 'Chuông' : 'Tắt âm'}</span>
+                    </button>
+                    <span className="font-mono text-xs sm:text-sm font-extrabold text-violet-300">
+                      Mã đề {activeVariant.code}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="text-xl sm:text-2xl font-extrabold font-mono tabular-nums tracking-wider text-center py-1 bg-slate-950/70 rounded-lg border border-slate-800">
                   {formatCountdown(remainingSeconds)}
                 </div>
 
-                <div className="flex items-center justify-between text-xs font-mono font-bold tabular-nums text-slate-200">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono font-bold tabular-nums text-slate-200">
                   <span>
                     Đã trả lời:{' '}
                     <strong className="text-emerald-400">
@@ -1766,13 +2386,13 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               </div>
 
               {/* Compact Question Status & Navigation Matrix Grid */}
-              <div className="shrink-0 bg-[#18182e] border-2 border-indigo-900/80 rounded-xl p-2.5 sm:p-3 space-y-2 shadow-md">
+              <div className="shrink-0 w-full max-w-full min-w-0 box-border overflow-hidden bg-[#18182e] border-2 border-indigo-900/80 rounded-xl p-3 sm:p-3 space-y-2 shadow-md">
                 <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-slate-800/80 pb-1.5">
                   <h3 className="text-xs sm:text-sm font-extrabold text-white">
                     Bảng Điều Hướng {totalQuestionCount} Câu Hỏi
                   </h3>
                   {/* Compact Inline Legend */}
-                  <div className="flex items-center gap-2 text-[11px] text-slate-200 font-mono font-bold">
+                  <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-200 font-mono font-bold">
                     <span className="flex items-center gap-1">
                       <span className="w-2.5 h-2.5 rounded-xs bg-violet-600 inline-block shrink-0" />
                       <span>Đã làm</span>
@@ -1789,6 +2409,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                 </div>
 
                 {/* Part I Grid */}
+                {p1Count > 0 && (
                 <div className="space-y-1">
                   <div className="text-[11px] sm:text-xs font-mono font-bold text-slate-200">
                     Phần I: Nhiều lựa chọn (Câu 1–{p1Count})
@@ -1815,8 +2436,10 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     })}
                   </div>
                 </div>
+                )}
 
-                {/* Part II Grid */}
+                {/* Part II Grid (only displayed when exam contains Part II questions) */}
+                {p2Count > 0 && (
                 <div className="space-y-1">
                   <div className="text-[11px] sm:text-xs font-mono font-bold text-slate-200">
                     Phần II: Đúng / Sai (Câu {p1Count + 1}–{p1Count + p2Count})
@@ -1846,8 +2469,10 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     })}
                   </div>
                 </div>
+                )}
 
-                {/* Part III Grid */}
+                {/* Part III Grid (only displayed when exam contains Part III questions) */}
+                {p3Count > 0 && (
                 <div className="space-y-1">
                   <div className="text-[11px] sm:text-xs font-mono font-bold text-slate-200">
                     Phần III: Trả lời ngắn (Câu {p1Count + p2Count + 1}–{totalQuestionCount})
@@ -1874,23 +2499,26 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     })}
                   </div>
                 </div>
+                )}
 
-                {/* Compact Single-Line Anti-Cheat Status Summary */}
-                <div className="px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-2 text-xs font-mono font-bold">
-                  <span className="text-slate-300">
-                    Giám sát: <strong className="text-emerald-400">ĐANG BẢO VỆ</strong>
-                  </span>
-                  <span className="text-slate-300">
-                    Vi phạm:{' '}
-                    <strong
-                      className={
-                        violations.length > 0 ? 'text-rose-400' : 'text-slate-200'
-                      }
-                    >
-                      {violations.length} lần
-                    </strong>
-                  </span>
-                </div>
+                {/* Compact Single-Line Anti-Cheat Status Summary (Hidden in Practice Mode) */}
+                {!isPracticeMode && (
+                  <div className="px-2.5 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-1.5 text-[11px] sm:text-xs font-mono font-bold whitespace-nowrap">
+                    <span className="text-slate-300">
+                      Giám sát: <strong className="text-emerald-400">ĐANG BẢO VỆ</strong>
+                    </span>
+                    <span className="text-slate-300">
+                      Vi phạm:{' '}
+                      <strong
+                        className={
+                          violations.length > 0 ? 'text-rose-400' : 'text-slate-200'
+                        }
+                      >
+                        {violations.length}/{maxAllowedViolations} lần
+                      </strong>
+                    </span>
+                  </div>
+                )}
 
                 {/* Primary Submit Exam CTA */}
                 {!isSubmitted ? (
@@ -1947,8 +2575,8 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
             <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-700/70 text-xs text-rose-100 space-y-2 leading-relaxed">
               <p className="font-semibold">{activeWarningModal.description}</p>
               <p className="font-mono text-rose-300">
-                Thời điểm ghi nhận: {activeWarningModal.timestamp} · Tổng số lần vi phạm:{' '}
-                {violations.length} lần
+                Thời điểm ghi nhận: {activeWarningModal.timestamp} · Số lần vi phạm:{' '}
+                {violations.length}/{maxAllowedViolations} lần (Mức {activeViolationLevel})
               </p>
             </div>
 
@@ -2038,8 +2666,8 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
           MODAL 3: DETAILED MOET (GDPT 2018) SCORECARD & REVIEW MODAL
       ===================================================================== */}
       {showScorecardModal && gradeReport && (
-        <div className="fixed inset-0 z-50 bg-black/85 overflow-y-auto p-4 sm:p-6 flex items-start justify-center">
-          <div className="bg-[#18182e] border border-indigo-700/80 rounded-2xl max-w-5xl w-full my-6 p-6 sm:p-8 space-y-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/85 overflow-y-auto overflow-x-hidden p-3 sm:p-6 flex items-start justify-center box-border">
+          <div className="bg-[#18182e] border border-indigo-700/80 rounded-2xl max-w-5xl w-full min-w-0 box-border overflow-hidden my-4 sm:my-6 p-4 sm:p-8 space-y-5 sm:space-y-6 shadow-2xl">
             {/* Scorecard Header */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
               <div className="space-y-1">
@@ -2050,7 +2678,10 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                   Phiếu Điểm Chi Tiết — {studentName} (SBD: {studentId})
                 </h2>
                 <div className="text-xs text-slate-400 font-mono">
-                  Mã đề: {activeVariant.code} · Hoàn thành: {gradeReport.answeredCount}/{gradeReport.totalQuestionCount} câu · Số vi phạm quy chế: {violations.length} lần
+                  Mã đề: {activeVariant.code} · Hoàn thành: {gradeReport.answeredCount}/{gradeReport.totalQuestionCount} câu
+                  {!isPracticeMode
+                    ? ` · Số vi phạm quy chế: ${violations.length}/${maxAllowedViolations} lần`
+                    : ' · Chế độ: Ôn tập'}
                 </div>
               </div>
 
@@ -2072,70 +2703,61 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               </div>
             )}
 
-            {matchedOnlineAssignment?.detailedSolutionContent && (
-              <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-600/60 space-y-2">
-                <div className="text-xs sm:text-sm font-bold text-emerald-300">
-                  Tài Liệu & Lời Giải Chi Tiết Ôn Tập Từ Giáo Viên{' '}
-                  {matchedOnlineAssignment.detailedSolutionFileName
-                    ? `(${matchedOnlineAssignment.detailedSolutionFileName})`
-                    : ''}
-                  :
-                </div>
-                <div className="text-xs sm:text-sm text-slate-200 whitespace-pre-wrap font-mono max-h-40 overflow-y-auto p-3 rounded-lg bg-slate-950/80 border border-slate-800">
-                  {matchedOnlineAssignment.detailedSolutionContent}
-                </div>
-              </div>
-            )}
-
-            {/* 4-Column Score Breakdown */}
+            {/* Dynamic Score Breakdown (only shows parts present in the exam) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 font-mono tabular-nums">
               <div className="p-4 rounded-xl bg-indigo-950/70 border border-indigo-500/60 space-y-1">
-                <div className="text-xs text-indigo-300 font-sans">
+                <div className="text-xs text-indigo-300 font-sans font-semibold">
                   Tổng Điểm Thang 10,00
                 </div>
                 <div className="text-3xl font-extrabold text-white">
                   {gradeReport.scaled10Score.toFixed(2)} <span className="text-sm font-normal text-indigo-300">/ 10,00</span>
                 </div>
-                <div className="text-[11px] text-indigo-300">
+                <div className="text-[11px] text-indigo-300 font-semibold">
                   Điểm thực đạt: {gradeReport.rawTotalScore.toFixed(2)} / {gradeReport.maxPossibleScore.toFixed(2)}
                 </div>
               </div>
 
-              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
-                <div className="text-xs text-slate-400 font-sans">
-                  Phần I · Nhiều lựa chọn (0,25đ/câu)
+              {p1Count > 0 && (
+                <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+                  <div className="text-xs text-slate-400 font-sans font-semibold">
+                    Phần I · Nhiều lựa chọn (0,25đ/câu)
+                  </div>
+                  <div className="text-2xl font-bold text-emerald-400">
+                    {gradeReport.part1Score.toFixed(2)} <span className="text-xs text-slate-500">/ {gradeReport.part1Max.toFixed(2)} đ</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Đúng {gradeReport.part1CorrectCount}/{p1Count} câu
+                  </div>
                 </div>
-                <div className="text-2xl font-bold text-emerald-400">
-                  {gradeReport.part1Score.toFixed(2)} <span className="text-xs text-slate-500">/ {gradeReport.part1Max.toFixed(2)} đ</span>
-                </div>
-                <div className="text-[11px] text-slate-400">
-                  Đúng {gradeReport.part1CorrectCount}/{activeVariant.part1.length} câu
-                </div>
-              </div>
+              )}
 
-              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
-                <div className="text-xs text-slate-400 font-sans">
-                  Phần II · Đúng / Sai (Lũy tiến 1,0đ)
+              {p2Count > 0 && (
+                <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+                  <div className="text-xs text-slate-400 font-sans font-semibold">
+                    Phần II · Đúng / Sai (Lũy tiến 1,0đ)
+                  </div>
+                  <div className="text-2xl font-bold text-violet-400">
+                    {gradeReport.part2Score.toFixed(2)} <span className="text-xs text-slate-500">/ {gradeReport.part2Max.toFixed(2)} đ</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Đạt tối đa 4/4 ý: {gradeReport.part2FullCorrectCount}/{p2Count} câu
+                  </div>
                 </div>
-                <div className="text-2xl font-bold text-violet-400">
-                  {gradeReport.part2Score.toFixed(2)} <span className="text-xs text-slate-500">/ {gradeReport.part2Max.toFixed(2)} đ</span>
-                </div>
-                <div className="text-[11px] text-slate-400">
-                  Đạt tối đa 4/4 ý: {gradeReport.part2FullCorrectCount}/{activeVariant.part2.length} câu
-                </div>
-              </div>
+              )}
 
-              <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
-                <div className="text-xs text-slate-400 font-sans">
-                  Phần III · Trả lời ngắn (0,25đ/câu)
+              {p3Count > 0 && (
+                <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-1">
+                  <div className="text-xs text-slate-400 font-sans font-semibold">
+                    Phần III · Trả lời ngắn (0,25đ/câu)
+                  </div>
+                  <div className="text-2xl font-bold text-amber-400">
+                    {gradeReport.part3Score.toFixed(2)} <span className="text-xs text-slate-500">/ {gradeReport.part3Max.toFixed(2)} đ</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Đúng {gradeReport.part3CorrectCount}/{p3Count} câu
+                  </div>
                 </div>
-                <div className="text-2xl font-bold text-amber-400">
-                  {gradeReport.part3Score.toFixed(2)} <span className="text-xs text-slate-500">/ {gradeReport.part3Max.toFixed(2)} đ</span>
-                </div>
-                <div className="text-[11px] text-slate-400">
-                  Đúng {gradeReport.part3CorrectCount}/{activeVariant.part3.length} câu
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Filter Review Controls */}
@@ -2143,26 +2765,29 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
               <div className="flex flex-wrap items-center gap-1.5">
                 {(
                   [
-                    { id: 'ALL', label: `Tất cả (${gradeReport.details.length} câu)` },
+                    { id: 'ALL' as const, label: `Tất cả (${gradeReport.details.length} câu)`, show: true },
                     {
-                      id: 'INCORRECT',
+                      id: 'INCORRECT' as const,
                       label: `Câu sai / Chưa trọn điểm (${
                         gradeReport.details.filter((d) => d.status !== 'CORRECT').length
                       })`,
+                      show: true,
                     },
-                    { id: 'PART_I', label: 'Phần I' },
-                    { id: 'PART_II', label: 'Phần II (Đúng/Sai)' },
-                    { id: 'PART_III', label: 'Phần III (Trả lời ngắn)' },
-                  ] as const
-                ).map((f) => (
+                    { id: 'PART_I' as const, label: `Phần I (${p1Count} câu)`, show: p1Count > 0 },
+                    { id: 'PART_II' as const, label: `Phần II (${p2Count} câu)`, show: p2Count > 0 },
+                    { id: 'PART_III' as const, label: `Phần III (${p3Count} câu)`, show: p3Count > 0 },
+                  ]
+                )
+                  .filter((f) => f.show)
+                  .map((f) => (
                   <button
                     key={f.id}
                     type="button"
                     onClick={() => setReviewFilter(f.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    className={`px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap shrink-0 ${
                       reviewFilter === f.id
                         ? 'bg-violet-600 text-white'
-                        : 'bg-slate-900 text-slate-400 hover:text-white'
+                        : 'bg-slate-900 text-slate-300 hover:text-white'
                     }`}
                   >
                     {f.label}
@@ -2172,7 +2797,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
             </div>
 
             {/* Detailed Question-by-Question Review List */}
-            <div className="space-y-3 max-h-[52vh] overflow-y-auto pr-1">
+            <div className="space-y-4 max-h-[58vh] overflow-y-auto pr-1.5">
               {gradeReport.details
                 .filter((d) => {
                   if (reviewFilter === 'INCORRECT') return d.status !== 'CORRECT';
@@ -2184,12 +2809,12 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                 .map((item) => (
                   <div
                     key={item.globalNumber}
-                    className="p-4 rounded-xl bg-slate-900/90 border border-slate-800 space-y-2.5"
+                    className="p-5 rounded-xl bg-slate-900/90 border border-slate-800 space-y-3.5"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-violet-400">
-                          Câu {item.globalNumber} (Phần {item.part} · Câu {item.partQuestionNumber})
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm sm:text-base font-mono">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-violet-400 whitespace-nowrap shrink-0">
+                          Câu {item.globalNumber}
                         </span>
                         <span aria-hidden="true">·</span>
                         {item.status === 'CORRECT' && (
@@ -2210,16 +2835,16 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                         )}
                       </div>
 
-                      <div className="text-slate-300">
+                      <div className="text-slate-200 font-semibold">
                         <span>Bài làm: {item.userAnswerSummary}</span>
                         <span className="mx-2 text-slate-600">|</span>
-                        <span className="text-emerald-400 font-semibold">
+                        <span className="text-emerald-400 font-bold">
                           Đáp án: {item.correctAnswerSummary}
                         </span>
                       </div>
                     </div>
 
-                    <div className="text-xs sm:text-sm text-slate-200 leading-relaxed">
+                    <div className="text-base sm:text-lg font-medium text-slate-100 leading-relaxed">
                       <MathText text={item.questionText} />
                     </div>
 
@@ -2234,21 +2859,21 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                     )}
 
                     {item.subDetails && item.subDetails.length > 0 && (
-                      <div className="space-y-1.5 pt-1">
+                      <div className="space-y-2 pt-1">
                         {item.subDetails.map((sub) => {
                           const isSubRight = sub.userChoice === sub.correctChoice;
                           return (
                             <div
                               key={sub.label}
-                              className={`p-2.5 rounded-lg border text-xs leading-relaxed ${
+                              className={`p-3 rounded-lg border text-sm sm:text-base leading-relaxed ${
                                 isSubRight
-                                  ? 'bg-emerald-950/20 border-emerald-500/30 text-slate-200'
-                                  : 'bg-rose-950/20 border-rose-500/30 text-slate-200'
+                                  ? 'bg-emerald-950/20 border-emerald-500/30 text-slate-100'
+                                  : 'bg-rose-950/20 border-rose-500/30 text-slate-100'
                               }`}
                             >
                               <div className="flex flex-wrap items-center justify-between gap-2 font-mono">
                                 <span className="font-bold text-indigo-300">
-                                  Ý {sub.label}) <span className="font-sans font-normal text-slate-200"><MathText text={sub.text} /></span>
+                                  Ý {sub.label}) <span className="font-sans font-normal text-slate-100"><MathText text={sub.text} /></span>
                                 </span>
                                 <span className="shrink-0">
                                   Chọn:{' '}
@@ -2262,7 +2887,7 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                                 </span>
                               </div>
                               {sub.explanation && (
-                                <div className="mt-1 pt-1 border-t border-slate-800/80 text-slate-300">
+                                <div className="mt-1.5 pt-1.5 border-t border-slate-800/80 text-slate-200">
                                   <span className="font-semibold text-indigo-300">Giải thích: </span>
                                   <MathText text={sub.explanation} />
                                 </div>
@@ -2273,12 +2898,91 @@ export const StudentExamEnvironment: React.FC<StudentExamEnvironmentProps> = ({
                       </div>
                     )}
 
-                    <div className="text-xs text-slate-300 border-t border-slate-800/80 pt-2 leading-relaxed whitespace-pre-line">
-                      <span className="font-semibold text-indigo-300">Lời giải chi tiết: </span>
-                      <MathText text={item.explanation} />
+                    <div className="text-sm sm:text-base text-slate-100 border-t border-slate-800/80 pt-3 leading-relaxed whitespace-pre-line">
+                      <span className="font-bold text-indigo-300">Lời giải chi tiết: </span>
+                      <MathText text={formatCleanExplanation(item.explanation)} />
                     </div>
                   </div>
                 ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Code Modal in Active Exam Workspace */}
+      {showQrModal && (
+        <div className="no-print fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="max-w-md w-full rounded-2xl bg-[#18182e] border-2 border-violet-500/80 p-6 shadow-2xl space-y-5 text-center relative">
+            <button
+              type="button"
+              onClick={() => setShowQrModal(false)}
+              className="absolute top-4 right-4 p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+              aria-label="Đóng cửa sổ QR"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="space-y-1.5">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-violet-600/30 border border-violet-500/50 text-violet-200 text-xs font-mono font-bold">
+                <QrCode className="w-3.5 h-3.5" />
+                <span>MÃ QR VÀO PHÒNG THI TRỰC TUYẾN</span>
+              </div>
+              <h3 className="text-xl font-extrabold text-white">
+                Mã Bài Thi: <span className="font-mono text-amber-300">{effectiveQrExamCode}</span>
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-300">
+                Quét mã QR bằng điện thoại để mở nhanh đường dẫn phiên thi này trên thiết bị di động.
+              </p>
+            </div>
+
+            <div className="mx-auto w-64 h-64 p-4 rounded-2xl bg-white border-4 border-violet-500/80 shadow-xl flex items-center justify-center">
+              {qrCodeDataUrl ? (
+                <img
+                  src={qrCodeDataUrl}
+                  alt={`QR Code Mã đề ${effectiveQrExamCode}`}
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <QrCode className="w-24 h-24 text-indigo-950 animate-pulse" />
+              )}
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/90 border border-slate-800 text-left space-y-1">
+              <div className="text-[11px] font-mono uppercase text-slate-400 font-bold">
+                Đường dẫn phiên thi (Session URL):
+              </div>
+              <div className="text-xs font-mono text-indigo-300 break-all select-all">
+                {currentExamSessionUrl}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={handleCopySessionUrl}
+                className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs sm:text-sm font-bold text-slate-100 border border-slate-700 transition-colors"
+              >
+                {copiedSessionUrl ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="text-emerald-300">Đã Sao Chép</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4 shrink-0" />
+                    <span>Sao Chép Link</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadQrCode}
+                className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-xs sm:text-sm font-bold text-white shadow-md transition-colors"
+              >
+                <Download className="w-4 h-4 shrink-0" />
+                <span>Tải Ảnh QR</span>
+              </button>
             </div>
           </div>
         </div>

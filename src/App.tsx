@@ -4,7 +4,19 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyRound, Moon, Shuffle, Sun, Type } from 'lucide-react';
+import {
+  BarChart3,
+  GraduationCap,
+  Home,
+  KeyRound,
+  Moon,
+  Play,
+  ShieldCheck,
+  Shuffle,
+  Sparkles,
+  Sun,
+  Type,
+} from 'lucide-react';
 import {
   ExamData,
   OnlineExamAssignment,
@@ -19,7 +31,9 @@ import {
 import {
   countCompletedQuestions,
   generateMultipleVariants,
+  restoreUnshuffledVariant,
 } from './utils/scramblerAndGrader';
+import { parseAndMergeDetailedSolutionDocument } from './utils/examDocumentParser';
 import { LandingPage } from './components/LandingPage';
 import { TeacherPortal } from './components/TeacherPortal';
 import { StudentExamEnvironment } from './components/StudentExamEnvironment';
@@ -41,16 +55,119 @@ const ONLINE_ASSIGNMENTS_STORAGE_KEY = 'smarttest_gdpt2018_online_assignments_v1
 const ADMIN_PIN_STORAGE_KEY = 'smarttest_gdpt2018_admin_pin_v1';
 const DEFAULT_ADMIN_SIX_DIGIT_PIN = '123456';
 
+/**
+ * Consolidates duplicate intermediate-keystroke assignments created from the same uploaded examId
+ * (e.g. "UPLOAD-54572" typed across 1102 -> 102 -> 1202 -> 120 -> 1205) into a single assignment
+ * (keeping the newest examCode first in the list) while recovering any detailedSolutionContent
+ * from sibling records and merging it into examData.
+ */
+function consolidateAndHydrateAssignments(
+  list: OnlineExamAssignment[]
+): OnlineExamAssignment[] {
+  if (!Array.isArray(list) || list.length === 0) return list;
+
+  // Group rich solution data by uploaded examId so if the latest assignment lost detailedSolutionContent,
+  // it inherits it from any sibling record with the same examId.
+  const solutionByUploadExamId = new Map<
+    string,
+    {
+      detailedSolutionContent: string;
+      detailedSolutionFileName?: string;
+    }
+  >();
+
+  for (const item of list) {
+    const exId = item?.examData?.examId?.trim();
+    const sol = item?.detailedSolutionContent?.trim();
+    if (exId && sol && !solutionByUploadExamId.has(exId)) {
+      solutionByUploadExamId.set(exId, {
+        detailedSolutionContent: sol,
+        detailedSolutionFileName: item.detailedSolutionFileName,
+      });
+    }
+  }
+
+  const seenCodes = new Set<string>();
+  const seenUploadExamIds = new Set<string>();
+  const consolidated: OnlineExamAssignment[] = [];
+
+  for (const item of list) {
+    if (!item || !item.examCode) continue;
+    const codeKey = item.examCode.trim().toUpperCase();
+    if (seenCodes.has(codeKey)) continue;
+
+    const exId = item.examData?.examId?.trim() || '';
+    const isUploadedExam = /^UPLOAD-\d+$/i.test(exId);
+
+    // If an uploaded exam (UPLOAD-xxxxx) already has its newest examCode in the list,
+    // skip older intermediate keystroke codes (such as 120, 1202, 102, 1102 when 1205 is first).
+    if (isUploadedExam && seenUploadExamIds.has(exId)) {
+      continue;
+    }
+
+    seenCodes.add(codeKey);
+    if (isUploadedExam) {
+      seenUploadExamIds.add(exId);
+    }
+
+    const recoveredSol =
+      item.detailedSolutionContent?.trim() ||
+      (exId ? solutionByUploadExamId.get(exId)?.detailedSolutionContent : '') ||
+      '';
+    const recoveredFileName =
+      item.detailedSolutionFileName ||
+      (exId ? solutionByUploadExamId.get(exId)?.detailedSolutionFileName : undefined);
+
+    let nextExamData = item.examData;
+    if (recoveredSol && nextExamData) {
+      const merged = parseAndMergeDetailedSolutionDocument(recoveredSol, nextExamData);
+      if (merged.matchedQuestionCount > 0) {
+        nextExamData = merged.mergedExam;
+      }
+    }
+
+    const resolvedMode: 'exam' | 'practice' =
+      item.mode === 'practice' ? 'practice' : 'exam';
+    const resolvedLevel: 1 | 2 | 3 =
+      item.violationLevel === 1
+        ? 1
+        : item.violationLevel === 3
+        ? 3
+        : 2;
+    const resolvedMaxViolations =
+      resolvedMode === 'practice'
+        ? 0
+        : resolvedLevel === 1
+        ? 1
+        : resolvedLevel === 3
+        ? 4
+        : 3;
+
+    consolidated.push({
+      ...item,
+      mode: resolvedMode,
+      violationLevel: resolvedLevel,
+      maxViolations: resolvedMaxViolations,
+      sourceMode: recoveredSol ? 'upload_with_solution' : item.sourceMode,
+      detailedSolutionContent: recoveredSol || undefined,
+      detailedSolutionFileName: recoveredFileName,
+      examData: nextExamData,
+    });
+  }
+
+  return consolidated;
+}
+
 export default function App() {
-  // Dual-Theme Switcher: 'dark' ("Tím Than") | 'light' ("Nền Trắng")
+  // Dual-Theme Switcher: 'light' ("Nền Sáng" - Default) | 'dark' ("Nền Tối")
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     try {
       const saved = localStorage.getItem(THEME_STORAGE_KEY);
       if (saved === 'light' || saved === 'dark') return saved;
     } catch {
-      // Fallback to dark
+      // Fallback to light
     }
-    return 'dark';
+    return 'light';
   });
 
   useEffect(() => {
@@ -60,8 +177,12 @@ export default function App() {
       // Ignore storage error
     }
     if (theme === 'light') {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('theme-light');
       document.body.classList.add('theme-light');
     } else {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('theme-light');
       document.body.classList.remove('theme-light');
     }
   }, [theme]);
@@ -103,6 +224,56 @@ export default function App() {
   // Top-level view hierarchy: 'home' | 'scrambler' | 'teacher' | 'student' | 'statistics'
   const [currentView, setCurrentView] = useState<'home' | 'scrambler' | 'teacher' | 'student' | 'statistics'>('home');
   const [teacherSubTab, setTeacherSubTab] = useState<'bank' | 'scrambler' | 'monitor' | 'online_exam'>('bank');
+  const [homeScrollProgress, setHomeScrollProgress] = useState<number>(0);
+  const headerRef = useRef<HTMLElement | null>(null);
+  const [headerHeightPx, setHeaderHeightPx] = useState<number>(68);
+
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const syncHeight = () => {
+      const h = Math.round(el.getBoundingClientRect().height);
+      if (h > 40) setHeaderHeightPx(h);
+    };
+    syncHeight();
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(syncHeight);
+      observer.observe(el);
+    }
+    window.addEventListener('resize', syncHeight, { passive: true });
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', syncHeight);
+    };
+  }, [fontSizeMode, currentView]);
+
+  useEffect(() => {
+    if (currentView !== 'home') {
+      setHomeScrollProgress(0);
+      return;
+    }
+
+    const updateScrollProgress = () => {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
+      const docHeight =
+        document.documentElement.scrollHeight - document.documentElement.clientHeight;
+      if (docHeight <= 0) {
+        setHomeScrollProgress(0);
+        return;
+      }
+      const percentage = Math.min(100, Math.max(0, (scrollTop / docHeight) * 100));
+      setHomeScrollProgress(percentage);
+    };
+
+    updateScrollProgress();
+    window.addEventListener('scroll', updateScrollProgress, { passive: true });
+    window.addEventListener('resize', updateScrollProgress, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', updateScrollProgress);
+      window.removeEventListener('resize', updateScrollProgress);
+    };
+  }, [currentView]);
 
   // 6-Digit Admin Password Protection State (Default: 123456, changeable by Network Admin)
   const [adminPin, setAdminPin] = useState<string>(() => {
@@ -161,7 +332,11 @@ export default function App() {
       const raw = localStorage.getItem(ONLINE_ASSIGNMENTS_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as OnlineExamAssignment[];
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const cleaned = consolidateAndHydrateAssignments(parsed);
+          localStorage.setItem(ONLINE_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(cleaned));
+          return cleaned;
+        }
       }
     } catch {
       // Fallback to default seed assignment
@@ -198,23 +373,43 @@ export default function App() {
         assignment: OnlineExamAssignment;
       }
     ) => {
-      setExamData(normalized.examData);
-      setVariants((prev) => {
-        const cloudCodes = new Set(
-          normalized.variants.map((v) => v.code.trim().toUpperCase())
-        );
-        const others = prev.filter(
-          (v) => !cloudCodes.has(v.code.trim().toUpperCase())
-        );
-        return [...normalized.variants, ...others];
-      });
       setOnlineAssignments((prev) => {
-        const filtered = prev.filter(
-          (a) =>
-            a.examCode.trim().toUpperCase() !==
-            normalized.assignment.examCode.trim().toUpperCase()
-        );
-        const nextList = [normalized.assignment, ...filtered];
+        const combined = [normalized.assignment, ...prev];
+        const nextList = consolidateAndHydrateAssignments(combined);
+        const primaryMatch =
+          nextList.find(
+            (a) =>
+              a.examCode.trim().toUpperCase() ===
+              normalized.assignment.examCode.trim().toUpperCase()
+          ) || nextList[0];
+
+        if (primaryMatch?.examData) {
+          setExamData(primaryMatch.examData);
+          setVariants((prevVars) => {
+            const hydratedCloudVars = normalized.variants.map((v) =>
+              restoreUnshuffledVariant(v, primaryMatch.examData)
+            );
+            const cloudCodes = new Set(
+              hydratedCloudVars.map((v) => v.code.trim().toUpperCase())
+            );
+            const others = prevVars.filter(
+              (v) => !cloudCodes.has(v.code.trim().toUpperCase())
+            );
+            return [...hydratedCloudVars, ...others];
+          });
+        } else {
+          setExamData(normalized.examData);
+          setVariants((prevVars) => {
+            const cloudCodes = new Set(
+              normalized.variants.map((v) => v.code.trim().toUpperCase())
+            );
+            const others = prevVars.filter(
+              (v) => !cloudCodes.has(v.code.trim().toUpperCase())
+            );
+            return [...normalized.variants, ...others];
+          });
+        }
+
         try {
           localStorage.setItem(ONLINE_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(nextList));
         } catch {
@@ -460,15 +655,24 @@ export default function App() {
 
   const handleSaveOnlineAssignment = useCallback(
     (assignment: OnlineExamAssignment) => {
-      const syncedExam: ExamData = {
+      let baseExamData: ExamData = {
         ...assignment.examData,
         title: assignment.examTitle || assignment.examData.title,
         subject: assignment.subject || assignment.examData.subject,
         durationMinutes: assignment.durationMinutes || assignment.examData.durationMinutes || 50,
       };
+      if (assignment.detailedSolutionContent?.trim()) {
+        const merged = parseAndMergeDetailedSolutionDocument(
+          assignment.detailedSolutionContent,
+          baseExamData
+        );
+        if (merged.matchedQuestionCount > 0) {
+          baseExamData = merged.mergedExam;
+        }
+      }
       const updatedAssignment: OnlineExamAssignment = {
         ...assignment,
-        examData: syncedExam,
+        examData: baseExamData,
       };
 
       setOnlineAssignments((prev) => {
@@ -477,7 +681,10 @@ export default function App() {
             a.id !== updatedAssignment.id &&
             a.examCode.trim().toUpperCase() !== updatedAssignment.examCode.trim().toUpperCase()
         );
-        const nextList = [updatedAssignment, ...filtered];
+        const nextList = consolidateAndHydrateAssignments([
+          updatedAssignment,
+          ...filtered,
+        ]);
         try {
           localStorage.setItem(ONLINE_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(nextList));
         } catch {
@@ -486,15 +693,17 @@ export default function App() {
         return nextList;
       });
 
-      setExamData(syncedExam);
+      setExamData(baseExamData);
       setVariants((prev) => {
         const cleanCode = updatedAssignment.examCode.trim();
         const generated = generateMultipleVariants(
-          syncedExam,
+          baseExamData,
           [cleanCode],
           `ONLINE-SYNC-${cleanCode}-${Date.now()}`
         );
-        const targetVariant = generated[0];
+        const targetVariant = generated[0]
+          ? restoreUnshuffledVariant(generated[0], baseExamData)
+          : undefined;
         const others = prev.filter(
           (v) => v.code.trim().toUpperCase() !== cleanCode.toUpperCase()
         );
@@ -650,205 +859,282 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen w-full max-w-full overflow-x-clip flex flex-col transition-colors duration-200 ${
+      className={`min-h-screen w-full max-w-[100vw] min-w-0 overflow-x-hidden flex flex-col box-border transition-colors duration-200 ${
         theme === 'light'
-          ? 'theme-light bg-slate-50 text-slate-900'
+          ? 'theme-light bg-[#F8FAFC] text-[#172033]'
           : 'bg-[#0b0f19] text-slate-100'
       }`}
     >
-      {/* Persistent Top Navigation Bar — Enforced Fixed Positioning During Scroll */}
-      <header className="fixed top-0 left-0 right-0 z-40 w-full max-w-[100vw] overflow-hidden flex flex-nowrap items-center justify-between gap-1.5 sm:gap-3 px-2 sm:px-5 py-2 sm:py-2.5 bg-[#0b0f19]/95 backdrop-blur border-b border-indigo-950/90 no-print">
-        {/* Zone 1: Prominent Exam/Assessment Emblem Icon & Theme Switcher */}
-        <div className="flex flex-nowrap flex-shrink-0 items-center gap-1.5 sm:gap-2 shrink-0 min-w-0 max-w-full overflow-hidden">
-          <a
-            href="#top"
-            onClick={(e) => {
-              e.preventDefault();
-              setCurrentView('home');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            title="Hệ Thống Khảo Thí & Kiểm Tra Đánh Giá Thông Minh (Đa Môn Học)"
-            aria-label="Trang chủ Hệ thống Khảo thí & Kiểm tra"
-            className="group relative flex items-center gap-2 p-0.5 sm:p-1 rounded-xl transition-transform hover:scale-105 focus:outline-none shrink-0"
-          >
-            {/* Unified Zoomed SmartTest Logo Icon */}
-            <div className="relative flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden bg-[#081226] shadow-md shadow-violet-600/30 ring-1 ring-white/25 group-hover:ring-violet-300 transition-all">
-              <img
-                src="/logo.png"
-                alt="SmartTest Logo"
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover scale-105"
-              />
-            </div>
-          </a>
+      {/* Persistent Top Navigation Bar — Responsive 1-Row (Wide Desktop >=1180px) / Clean 2-Row (Split Preview & Tablet <1180px) */}
+      <header
+        ref={headerRef}
+        className={`fixed top-0 inset-x-0 z-40 w-full max-w-[100vw] min-w-0 box-border overflow-hidden backdrop-blur-md border-b transition-colors duration-200 no-print ${
+          theme === 'light'
+            ? 'bg-white/95 border-[#E2E8F0] shadow-[0_1px_3px_rgba(15,23,42,0.04)]'
+            : 'bg-[#0b0f19]/95 border-slate-800/90'
+        }`}
+      >
+        <div className="w-full max-w-[1440px] min-w-0 mx-auto px-3.5 sm:px-4 lg:px-5 py-2 min-[1240px]:py-2.5 min-h-[60px] sm:min-h-[68px] flex flex-wrap items-center justify-between gap-x-2 gap-y-2 box-border">
+          {/* Zone 1: Brand Identity + Theme & Font-Size Utility Controls */}
+          <div className="order-1 flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+            <a
+              href="#top"
+              onClick={(e) => {
+                e.preventDefault();
+                setCurrentView('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              title="SmartTest Physics GDPT 2018 — Nền tảng khảo thí và ôn luyện Vật lí thông minh"
+              aria-label="Trang chủ SmartTest Physics"
+              className="animate-logo-text-fade-in group relative flex items-center gap-1.5 sm:gap-2 rounded-xl focus:outline-none shrink-0"
+            >
+              <div className="animate-logo-entrance relative flex items-center justify-center w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden bg-[#081226] shadow-xs ring-1 ring-[#6D28D9]/25 dark:ring-white/20 group-hover:scale-105 group-hover:ring-[#6D28D9]/50 transition-all duration-300 ease-out shrink-0">
+                <img
+                  src="/logo.png"
+                  alt="SmartTest Logo"
+                  referrerPolicy="no-referrer"
+                  className="animate-logo-entrance w-full h-full object-contain scale-100 transition-transform duration-500 ease-out group-hover:scale-105"
+                />
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 rounded-xl ring-1 ring-inset ring-white/20 animate-pulse"
+                />
+              </div>
+              <div className="animate-logo-text-fade-in flex flex-col leading-tight shrink-0">
+                <span
+                  className={`text-[12px] sm:text-[13px] xl:text-[14px] font-extrabold tracking-tight whitespace-nowrap transition-colors duration-200 ${
+                    theme === 'light'
+                      ? 'text-[#172033] group-hover:text-[#6D28D9]'
+                      : 'text-white group-hover:text-violet-300'
+                  }`}
+                >
+                  <span className="sm:hidden">SmartTest</span>
+                  <span className="hidden sm:inline">SmartTest Physics</span>
+                </span>
+                <span
+                  className={`text-[9px] sm:text-[10px] font-bold tracking-wider uppercase whitespace-nowrap ${
+                    theme === 'light' ? 'text-[#64748B]' : 'text-slate-400'
+                  }`}
+                >
+                  GDPT 2018
+                </span>
+              </div>
+            </a>
 
-          {/* Dual-Theme Switcher Button (Tím Than vs. Nền Trắng) */}
-          <button
-            type="button"
-            onClick={toggleTheme}
-            title={
-              theme === 'dark'
-                ? 'Chuyển sang giao diện Nền Trắng (Light Theme)'
-                : 'Chuyển sang giao diện Tím Than (Dark Theme)'
-            }
-            aria-label="Chuyển đổi giao diện Sáng / Tối"
-            className={`inline-flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
-              theme === 'dark'
-                ? 'bg-indigo-950/80 hover:bg-indigo-900 border-violet-700/70 text-violet-100'
-                : 'bg-violet-50 hover:bg-violet-100 border-violet-300 text-violet-900 shadow-xs'
-            }`}
-          >
-            {theme === 'dark' ? (
-              <>
-                <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span>Nền Trắng</span>
-              </>
-            ) : (
-              <>
-                <Moon className="w-3.5 h-3.5 text-violet-700 shrink-0" />
-                <span>Tím Than</span>
-              </>
-            )}
-          </button>
+            <div
+              aria-hidden="true"
+              className={`hidden sm:block h-5 w-px mx-0.5 shrink-0 ${
+                theme === 'light' ? 'bg-[#E2E8F0]' : 'bg-slate-800'
+              }`}
+            />
 
-          {/* Dual Font-Size Switcher Button (Cỡ chữ hiện tại vs. Cỡ chữ lớn hơn) */}
-          <button
-            type="button"
-            onClick={toggleFontSizeMode}
-            title={
-              fontSizeMode === 'normal'
-                ? 'Chuyển sang chế độ Cỡ chữ lớn hơn'
-                : 'Chuyển về chế độ Cỡ chữ mặc định'
-            }
-            aria-label="Chuyển đổi cỡ chữ hệ thống"
-            className={`inline-flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-xl border text-[11px] sm:text-sm font-bold transition-all whitespace-nowrap shrink-0 ${
-              fontSizeMode === 'large'
-                ? 'bg-violet-600 hover:bg-violet-500 border-violet-400 text-white shadow-xs'
-                : theme === 'dark'
-                ? 'bg-indigo-950/80 hover:bg-indigo-900 border-violet-700/70 text-violet-100'
-                : 'bg-violet-50 hover:bg-violet-100 border-violet-300 text-violet-900 shadow-xs'
-            }`}
-          >
-            <Type className="w-3.5 h-3.5 shrink-0" />
-            <span>Cỡ Chữ</span>
-          </button>
-
-          {/* Mobile Quick "Trộn Đề" Button (visible on mobile where center nav is hidden) */}
-          <button
-            type="button"
-            onClick={handleNavigateQuickScrambler}
-            className={`md:hidden inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border text-[11px] font-bold transition-all whitespace-nowrap shrink-0 ${
-              currentView === 'scrambler'
-                ? 'bg-violet-600 border-violet-400 text-white'
-                : 'bg-indigo-950/80 hover:bg-indigo-900 border-violet-700/70 text-violet-100'
-            }`}
-          >
-            <Shuffle className="w-3 h-3 shrink-0" />
-            <span>Trộn Đề</span>
-          </button>
-        </div>
-
-        {/* Zone 2: Quick Navigation Links (Strictly Width-Constrained & Overflow-Protected) */}
-        <nav className="hidden md:flex flex-nowrap flex-shrink-0 items-center justify-center gap-2 lg:gap-3.5 xl:gap-5 overflow-hidden text-sm font-bold text-slate-100 px-1">
-          <button
-            type="button"
-            onClick={() => {
-              setCurrentView('home');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-              currentView === 'home'
-                ? 'text-violet-400 border-b-2 border-violet-400'
-                : ''
-            }`}
-          >
-            Trang Chủ
-          </button>
-
-          <button
-            type="button"
-            onClick={handleNavigateQuickScrambler}
-            className={`inline-flex items-center gap-1.5 font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-              currentView === 'scrambler'
-                ? 'text-violet-400 border-b-2 border-violet-400'
-                : ''
-            }`}
-          >
-            <Shuffle className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-            <span>Trộn Đề</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleNavigateTeacher()}
-            className={`font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-              currentView === 'teacher'
-                ? 'text-violet-400 border-b-2 border-violet-400'
-                : ''
-            }`}
-          >
-            Cổng Giáo Viên
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleLaunchStudentWithCode()}
-            className={`font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-              currentView === 'student'
-                ? 'text-emerald-400 border-b-2 border-emerald-400'
-                : ''
-            }`}
-          >
-            Cổng Học Sinh
-          </button>
-
-          <button
-            type="button"
-            onClick={handleNavigateStatistics}
-            className={`font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1 ${
-              currentView === 'statistics'
-                ? 'text-amber-400 border-b-2 border-amber-400'
-                : ''
-            }`}
-          >
-            Thống Kê
-          </button>
-
-          <button
-            type="button"
-            onClick={handleScrollToFeatures}
-            className="font-bold hover:text-white transition-colors whitespace-nowrap shrink-0 py-1"
-          >
-            Giới Thiệu Tính Năng
-          </button>
-        </nav>
-
-        {/* Zone 3: Role Switcher Action Buttons (Strictly Width-Constrained & Overflow-Protected) */}
-        <div className="flex flex-nowrap flex-shrink-0 items-center justify-end gap-1.5 sm:gap-2 shrink-0 min-w-0 max-w-full overflow-hidden">
-          {currentView === 'teacher' && (
+            {/* Theme Toggle Button */}
             <button
               type="button"
-              onClick={() => {
-                setAdminTargetFeatureLabel('Cài Đặt Mật Khẩu Quản Trị (6 Số)');
-                setAdminModalMode('change');
-                setAdminModalOpen(true);
-              }}
-              title="Đổi mật khẩu 6 số hoặc khóa quyền Quản trị"
-              className="inline-flex items-center gap-1.5 px-2 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-xl border bg-emerald-950/80 hover:bg-emerald-900 border-emerald-500/70 text-emerald-200 transition-colors whitespace-nowrap shrink-0"
+              onClick={toggleTheme}
+              title={
+                theme === 'dark'
+                  ? 'Chuyển sang giao diện Nền Sáng (Light Mode)'
+                  : 'Chuyển sang giao diện Nền Tối (Dark Mode)'
+              }
+              aria-label="Chuyển đổi giao diện Sáng / Tối"
+              className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[12px] sm:text-[13px] font-bold transition-all whitespace-nowrap shrink-0 ${
+                theme === 'dark'
+                  ? 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-100'
+                  : 'bg-[#F8FAFC] hover:bg-slate-100 border-[#E2E8F0] text-[#172033]'
+              }`}
             >
-              <KeyRound className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span>Quản Trị</span>
+              {theme === 'dark' ? (
+                <>
+                  <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="hidden sm:inline">Nền Sáng</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-3.5 h-3.5 text-[#6D28D9] shrink-0" />
+                  <span className="hidden sm:inline">Nền Tối</span>
+                </>
+              )}
             </button>
-          )}
 
-          <button
-            type="button"
-            onClick={() => handleLaunchStudentWithCode()}
-            className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11px] sm:text-sm font-bold rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-colors whitespace-nowrap shrink-0 shadow-xs"
+            {/* Font-Size Switcher Button */}
+            <button
+              type="button"
+              onClick={toggleFontSizeMode}
+              title={
+                fontSizeMode === 'normal'
+                  ? 'Chuyển sang chế độ Cỡ chữ lớn hơn'
+                  : 'Chuyển về chế độ Cỡ chữ mặc định'
+              }
+              aria-label="Chuyển đổi cỡ chữ hệ thống"
+              className={`inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[12px] sm:text-[13px] font-bold transition-all whitespace-nowrap shrink-0 ${
+                fontSizeMode === 'large'
+                  ? 'bg-[#6D28D9] hover:bg-[#5B21B6] border-[#6D28D9] text-white shadow-xs'
+                  : theme === 'dark'
+                  ? 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-100'
+                  : 'bg-[#F8FAFC] hover:bg-slate-100 border-[#E2E8F0] text-[#172033]'
+              }`}
+            >
+              <Type className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Cỡ chữ</span>
+            </button>
+          </div>
+
+          {/* Zone 3 (Order 2 on <1180px so it stays top-right; Order 3 on >=1180px): Primary CTA Action Buttons */}
+          <div className="order-2 min-[1180px]:order-3 flex flex-wrap items-center justify-end gap-1 sm:gap-1.5 shrink-0">
+            {currentView === 'teacher' && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAdminTargetFeatureLabel('Cài Đặt Mật Khẩu Quản Trị (6 Số)');
+                  setAdminModalMode('change');
+                  setAdminModalOpen(true);
+                }}
+                title="Đổi mật khẩu 6 số hoặc khóa quyền Quản trị"
+                className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-1.5 text-[11.5px] sm:text-[13px] font-bold rounded-xl border bg-emerald-600 hover:bg-emerald-500 border-emerald-500 text-white transition-colors whitespace-nowrap shrink-0"
+              >
+                <KeyRound className="w-3.5 h-3.5 shrink-0" />
+                <span>Quản trị</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => handleLaunchStudentWithCode()}
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 sm:py-2 text-[11.5px] sm:text-[13px] font-bold rounded-xl bg-[#6D28D9] hover:bg-[#5B21B6] text-white transition-all whitespace-nowrap shrink-0 shadow-xs"
+            >
+              <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+              <span>Vào phòng thi</span>
+            </button>
+          </div>
+
+          {/* Zone 2: Centered & Responsive Main Navigation with flex-wrap, shrink-0, and staggered slide-in-down entrance */}
+          <nav
+            className={`order-3 min-[1180px]:order-2 flex flex-wrap items-center justify-center gap-1 sm:gap-1.5 w-full min-[1180px]:w-auto min-[1180px]:flex-1 min-w-0 shrink-0 pt-1.5 min-[1180px]:pt-0 border-t min-[1180px]:border-t-0 ${
+              theme === 'light' ? 'border-[#E2E8F0]/70' : 'border-slate-800/70'
+            }`}
           >
-            Vào Phòng Thi Thí Sinh
-          </button>
+            <button
+              type="button"
+              style={{ animationDelay: '50ms' }}
+              onClick={() => {
+                setCurrentView('home');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className={`animate-nav-slide-in-down inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[11.5px] sm:text-[13px] font-bold transition-colors whitespace-nowrap shrink-0 ${
+                currentView === 'home'
+                  ? theme === 'light'
+                    ? 'bg-[#6D28D9]/10 text-[#6D28D9]'
+                    : 'bg-violet-500/20 text-violet-300'
+                  : theme === 'light'
+                  ? 'text-[#172033] hover:text-[#6D28D9] hover:bg-slate-100/80'
+                  : 'text-slate-200 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <Home className="w-3.5 h-3.5 text-[#6D28D9] dark:text-violet-400 shrink-0" />
+              <span>Trang chủ</span>
+            </button>
+
+            <button
+              type="button"
+              style={{ animationDelay: '100ms' }}
+              onClick={handleNavigateQuickScrambler}
+              className={`animate-nav-slide-in-down inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[11.5px] sm:text-[13px] font-bold transition-colors whitespace-nowrap shrink-0 ${
+                currentView === 'scrambler'
+                  ? theme === 'light'
+                    ? 'bg-[#6D28D9]/10 text-[#6D28D9]'
+                    : 'bg-violet-500/20 text-violet-300'
+                  : theme === 'light'
+                  ? 'text-[#172033] hover:text-[#6D28D9] hover:bg-slate-100/80'
+                  : 'text-slate-200 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <Shuffle className="w-3.5 h-3.5 text-[#6D28D9] dark:text-violet-400 shrink-0" />
+              <span>Trộn đề</span>
+            </button>
+
+            <button
+              type="button"
+              style={{ animationDelay: '150ms' }}
+              onClick={() => handleNavigateTeacher()}
+              className={`animate-nav-slide-in-down inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[11.5px] sm:text-[13px] font-bold transition-colors whitespace-nowrap shrink-0 ${
+                currentView === 'teacher'
+                  ? theme === 'light'
+                    ? 'bg-[#6D28D9]/10 text-[#6D28D9]'
+                    : 'bg-violet-500/20 text-violet-300'
+                  : theme === 'light'
+                  ? 'text-[#172033] hover:text-[#6D28D9] hover:bg-slate-100/80'
+                  : 'text-slate-200 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-[#6D28D9] dark:text-violet-400 shrink-0" />
+              <span>Cổng giáo viên</span>
+            </button>
+
+            <button
+              type="button"
+              style={{ animationDelay: '200ms' }}
+              onClick={() => handleLaunchStudentWithCode()}
+              className={`animate-nav-slide-in-down inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[11.5px] sm:text-[13px] font-bold transition-colors whitespace-nowrap shrink-0 ${
+                currentView === 'student'
+                  ? theme === 'light'
+                    ? 'bg-[#6D28D9]/10 text-[#6D28D9]'
+                    : 'bg-violet-500/20 text-violet-300'
+                  : theme === 'light'
+                  ? 'text-[#172033] hover:text-[#6D28D9] hover:bg-slate-100/80'
+                  : 'text-slate-200 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <GraduationCap className="w-3.5 h-3.5 text-[#6D28D9] dark:text-violet-400 shrink-0" />
+              <span>Cổng học sinh</span>
+            </button>
+
+            <button
+              type="button"
+              style={{ animationDelay: '250ms' }}
+              onClick={handleNavigateStatistics}
+              className={`animate-nav-slide-in-down inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[11.5px] sm:text-[13px] font-bold transition-colors whitespace-nowrap shrink-0 ${
+                currentView === 'statistics'
+                  ? theme === 'light'
+                    ? 'bg-[#6D28D9]/10 text-[#6D28D9]'
+                    : 'bg-violet-500/20 text-violet-300'
+                  : theme === 'light'
+                  ? 'text-[#172033] hover:text-[#6D28D9] hover:bg-slate-100/80'
+                  : 'text-slate-200 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <BarChart3 className="w-3.5 h-3.5 text-[#6D28D9] dark:text-violet-400 shrink-0" />
+              <span>Thống kê</span>
+            </button>
+
+            <button
+              type="button"
+              style={{ animationDelay: '300ms' }}
+              onClick={handleScrollToFeatures}
+              className={`animate-nav-slide-in-down inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 sm:py-1.5 rounded-lg text-[11.5px] sm:text-[13px] font-bold transition-colors whitespace-nowrap shrink-0 ${
+                theme === 'light'
+                  ? 'text-[#172033] hover:text-[#6D28D9] hover:bg-slate-100/80'
+                  : 'text-slate-200 hover:text-white hover:bg-slate-800/60'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-[#6D28D9] dark:text-violet-400 shrink-0" />
+              <span>Giới thiệu</span>
+            </button>
+          </nav>
         </div>
+
+        {/* Subtle Scroll Progress Indicator under Header (Active on Home Page) */}
+        {currentView === 'home' && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute bottom-0 left-0 right-0 h-[2px] w-full bg-transparent overflow-hidden"
+          >
+            <div
+              className="h-full bg-gradient-to-r from-[#6D28D9] via-[#8B5CF6] to-[#16A34A] transition-[width] duration-150 ease-out"
+              style={{ width: `${homeScrollProgress}%` }}
+            />
+          </div>
+        )}
       </header>
 
       {/* 6-Digit Admin Password Verification & Change Password Modal */}
@@ -884,7 +1170,10 @@ export default function App() {
       />
 
       {/* Main Content Area — Preserving state across 'home' | 'scrambler' | 'teacher' | 'student' | 'statistics' */}
-      <main className="flex-1 w-full max-w-full overflow-x-clip pt-[53px] sm:pt-[58px]">
+      <main
+        style={{ paddingTop: `${headerHeightPx}px` }}
+        className="flex-1 w-full max-w-[100vw] min-w-0 overflow-x-hidden box-border"
+      >
         {currentView === 'home' && (
           <LandingPage
             examData={examData}
@@ -892,6 +1181,7 @@ export default function App() {
             workstations={workstations}
             onNavigateTeacher={handleNavigateTeacher}
             onNavigateStudent={handleLaunchStudentWithCode}
+            onNavigateStatistics={handleNavigateStatistics}
             onResetSystemCache={handleResetSystemCache}
             isAdminAuthenticated={isAdminAuthenticated}
             onRequestAdminAuth={requestAdminAuthentication}
@@ -945,61 +1235,80 @@ export default function App() {
         )}
       </main>
 
-      {/* Formal Educational Branding Footer */}
-      <footer className="border-t border-slate-900 bg-[#080b12] px-6 py-5 text-xs text-slate-400 no-print">
-        <div className="max-w-[1360px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <img
-              src="/logo.png"
-              alt="SmartTest Logo"
-              referrerPolicy="no-referrer"
-              className="w-5 h-5 rounded-md object-cover shrink-0 ring-1 ring-white/20"
-            />
-            <span className="font-bold text-slate-200">SmartTest Physics GDPT 2018</span>
-            <span aria-hidden="true">·</span>
-            <span className="font-mono text-violet-400">Phiên bản v2.6 GDPT 2018</span>
-            <span aria-hidden="true">·</span>
-            <span>Hệ thống khảo thí, trộn đề & thi phòng máy Vật Lý THPT</span>
+      {/* Minimalist Premium EdTech Footer */}
+      <footer
+        className={`border-t px-6 py-8 text-xs transition-colors duration-200 no-print ${
+          theme === 'light'
+            ? 'bg-white border-[#E2E8F0] text-[#64748B]'
+            : 'bg-[#080b12] border-slate-900 text-slate-400'
+        }`}
+      >
+        <div className="max-w-[1280px] mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <img
+                src="/logo.png"
+                alt="SmartTest Logo"
+                referrerPolicy="no-referrer"
+                className="animate-logo-entrance w-6 h-6 rounded-lg object-cover shrink-0 ring-1 ring-slate-200 dark:ring-white/20"
+              />
+              <span
+                className={`text-sm font-extrabold tracking-tight ${
+                  theme === 'light' ? 'text-[#172033]' : 'text-white'
+                }`}
+              >
+                SmartTest Physics GDPT 2018
+              </span>
+              <span className="px-2 py-0.5 rounded-md bg-[#6D28D9]/10 text-[#6D28D9] dark:text-violet-300 font-mono text-[11px] font-bold">
+                Phiên bản v2.6 GDPT 2018
+              </span>
+            </div>
+            <p className="text-xs leading-relaxed max-w-xl">
+              Nền tảng khảo thí, trộn đề và ôn luyện Vật lí THPT theo Chương trình GDPT 2018.
+            </p>
+            <p className="text-[11px] text-slate-400">
+              © {new Date().getFullYear()} SmartTest Physics GDPT 2018. Bảo lưu mọi quyền.
+            </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 font-semibold">
             <button
               type="button"
               onClick={() => {
                 setCurrentView('home');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              className="hover:text-white transition-colors whitespace-nowrap"
+              className="hover:text-[#6D28D9] transition-colors whitespace-nowrap"
             >
-              Trang Chủ
+              Trang chủ
             </button>
             <button
               type="button"
               onClick={handleNavigateQuickScrambler}
-              className="hover:text-white transition-colors whitespace-nowrap"
+              className="hover:text-[#6D28D9] transition-colors whitespace-nowrap"
             >
-              Trộn Đề
+              Trộn đề
             </button>
             <button
               type="button"
               onClick={() => handleNavigateTeacher('bank')}
-              className="hover:text-white transition-colors whitespace-nowrap"
+              className="hover:text-[#6D28D9] transition-colors whitespace-nowrap"
             >
-              Cổng Giáo Viên
+              Cổng giáo viên
             </button>
             <button
               type="button"
               onClick={() => handleLaunchStudentWithCode('101')}
-              className="hover:text-white transition-colors whitespace-nowrap"
+              className="hover:text-[#6D28D9] transition-colors whitespace-nowrap"
             >
-              Phòng Thi Kiosk
+              Cổng học sinh
             </button>
             <button
               type="button"
               onClick={handleNavigateStatistics}
-              className="hover:text-white transition-colors whitespace-nowrap"
+              className="hover:text-[#6D28D9] transition-colors whitespace-nowrap"
             >
-              Thống Kê Điểm
+              Thống kê
             </button>
             <button
               type="button"
@@ -1009,7 +1318,7 @@ export default function App() {
                   handleResetSystemCache
                 )
               }
-              className="text-rose-400 hover:text-rose-300 font-mono transition-colors whitespace-nowrap"
+              className="text-rose-500 hover:text-rose-600 font-mono font-bold transition-colors whitespace-nowrap"
             >
               Reset Cache
             </button>

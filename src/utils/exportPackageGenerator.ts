@@ -97,8 +97,8 @@ export function latexToWordReadableHtml(input: string): string {
     // Superscripts and subscripts: ^{...}, _{...}, ^2, _1
     s = s.replace(/\^\{([^{}]+)\}/g, '<sup>$1</sup>');
     s = s.replace(/_\{([^{}]+)\}/g, '<sub>$1</sub>');
-    s = s.replace(/\^([0-9a-zA-Z+-]+)/g, '<sup>$1</sup>');
-    s = s.replace(/_([0-9a-zA-Z+-]+)/g, '<sub>$1</sub>');
+    s = s.replace(/\^([+-]?[0-9]+|[a-zA-Z]{1,4}(?![a-zA-Z0-9_]))/g, '<sup>$1</sup>');
+    s = s.replace(/_([0-9]+|[a-zA-Z\u00C0-\u1EF9]{1,12}(?![a-zA-Z0-9\u00C0-\u1EF9_]))/g, '<sub>$1</sub>');
     // Clean remaining backslashes on common commands
     s = s.replace(/\\left/g, '').replace(/\\right/g, '');
     return `<span style="font-family:'Cambria Math','Times New Roman',serif;font-style:italic;">${s}</span>`;
@@ -108,14 +108,39 @@ export function latexToWordReadableHtml(input: string): string {
   let out = input.replace(/\$\$\s*!\u20d7/g, '&#8407;');
   out = out.replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => transformMathSegment(m));
   out = out.replace(/\$([^$]+?)\$/g, (_, m) => transformMathSegment(m));
-  // Convert _{...}, ^{...}, and bare subscripts/superscripts outside $...$ into sub/sup
-  out = out.replace(/\b([a-zA-Z\u0394\u03b8])_\{([^{}]+)\}/g, '$1<sub>$2</sub>');
-  out = out.replace(/\b([a-zA-Z0-9\u0394\u03b8]+)\^\{([^{}]+)\}/g, '$1<sup>$2</sup>');
+  // Convert _{...}, ^{...}, and bare subscripts/superscripts outside $...$ into sub/sup (supporting adjacent p_1V_1 = p_2V_2)
+  out = out.replace(/_\{([^{}]+)\}/g, '<sub>$1</sub>');
+  out = out.replace(/\^\{([^{}]+)\}/g, '<sup>$1</sup>');
   out = out.replace(
-    /\b([a-zA-Z\u0394\u03b8])_([0-9a-zA-Z\u00C0-\u1EF9]+(?:\s+[a-zA-Z\u00C0-\u1EF9]+)?)/g,
+    /([a-zA-Z0-9\u0394\u03b8Đđ)\]])_([0-9]+|[a-zA-Z\u00C0-\u1EF9]{1,12}(?![a-zA-Z0-9\u00C0-\u1EF9_]))/g,
     '$1<sub>$2</sub>'
   );
-  out = out.replace(/\b([a-zA-Z0-9]+)\^(\d+)\b/g, '$1<sup>$2</sup>');
+  out = out.replace(
+    /([a-zA-Z0-9\u0394\u03b8Đđ)\]])\^([+-]?[0-9]+|[a-zA-Z]{1,4}(?![a-zA-Z0-9\u00C0-\u1EF9_]))/g,
+    '$1<sup>$2</sup>'
+  );
+  // Format @@TABLE_START@@...@@TABLE_END@@ into an HTML bordered table for Word/Preview
+  out = out.replace(/@@TABLE_START@@([\s\S]*?)@@TABLE_END@@/g, (_, payload: string) => {
+    const rows = payload
+      .split('@@ROW@@')
+      .map((r) => r.split('@@CELL@@').map((c) => c.trim()))
+      .filter((r) => r.some(Boolean));
+    if (rows.length === 0) return '';
+    const trsHtml = rows
+      .map((row, rIdx) => {
+        const bg = rIdx === 0 ? 'background-color:#1e3a5f;color:#ffffff;font-weight:bold;' : '';
+        const tag = rIdx === 0 ? 'th' : 'td';
+        const cellsHtml = row
+          .map(
+            (cell) =>
+              `<${tag} style="border:1pt solid #64748b;padding:4pt 10pt;text-align:center;${bg}">${cell}</${tag}>`
+          )
+          .join('');
+        return `<tr>${cellsHtml}</tr>`;
+      })
+      .join('');
+    return `<div style="margin:6pt 0;"><table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;margin:0 auto;border:1pt solid #64748b;">${trsHtml}</table></div>`;
+  });
   return out;
 }
 

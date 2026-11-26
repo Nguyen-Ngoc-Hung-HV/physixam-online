@@ -1622,7 +1622,7 @@ function convertOmathXmlToText(omathXml: string): string {
       (_, baseXml, subXml) => {
         const base = extractMathNode(baseXml).trim();
         const sub = extractMathNode(subXml).trim();
-        return sub ? `${base}_${sub}` : base;
+        return sub ? `<m:t>${base}_{${sub}}</m:t>` : `<m:t>${base}</m:t>`;
       }
     );
     // Handle <m:sSup> (superscript)
@@ -1631,7 +1631,7 @@ function convertOmathXmlToText(omathXml: string): string {
       (_, baseXml, supXml) => {
         const base = extractMathNode(baseXml).trim();
         const sup = extractMathNode(supXml).trim();
-        return sup ? `${base}^${sup}` : base;
+        return sup ? `<m:t>${base}^{${sup}}</m:t>` : `<m:t>${base}</m:t>`;
       }
     );
     // Handle <m:acc> (accent / vector arrow over base)
@@ -1644,7 +1644,7 @@ function convertOmathXmlToText(omathXml: string): string {
           .replace(/[\u20d0-\u20ff]/g, '')
           .trim()
       );
-      return baseText ? `\\vec{${baseText}}` : '';
+      return baseText ? `<m:t>\\vec{${baseText}}</m:t>` : '';
     });
     // Handle <m:f> (fraction)
     s = s.replace(
@@ -1652,10 +1652,12 @@ function convertOmathXmlToText(omathXml: string): string {
       (_, numXml, denXml) => {
         const num = extractMathNode(numXml).trim();
         const den = extractMathNode(denXml).trim();
-        return `\\frac{${num}}{${den}}`;
+        return `<m:t>\\frac{${num}}{${den}}</m:t>`;
       }
     );
-    const mtMatches = s.match(/<m:t[^>]*>([\s\S]*?)<\/m:t>|\\vec\{[^{}]+\}|\\frac\{[^{}]+\}\{[^{}]+\}|_[0-9a-zA-Z]+|\^[0-9a-zA-Z]+/g);
+    const mtMatches = s.match(
+      /<m:t[^>]*>([\s\S]*?)<\/m:t>|\\vec\{[^{}]+\}|\\frac\{[^{}]+\}\{[^{}]+\}|_\{[^{}]+\}|\^\{[^{}]+\}|_[0-9a-zA-Z]+|\^[0-9a-zA-Z]+/g
+    );
     if (!mtMatches) {
       return normalizeMathUnicodeChars(
         s.replace(/<[^>]+>/g, '').replace(/[\u20d0-\u20ff]/g, '').trim()
@@ -1715,25 +1717,144 @@ function parseWordDocumentXmlToAnnotatedText(
   xml: string,
   rIdToImageUri: Record<string, string>
 ): string {
+  // Helper to extract clean text from a single Word <w:p> inside a table cell (preserving oMath, subscripts, superscripts)
+  const extractCellParagraphText = (cellPXml: string): string => {
+    const withMath = cellPXml.replace(/<m:oMath\b[^>]*>[\s\S]*?<\/m:oMath>/g, (omathBlock) => {
+      const mathLatex = convertOmathXmlToText(omathBlock);
+      return mathLatex ? `<w:r><w:t>${mathLatex}</w:t></w:r>` : '';
+    });
+    const bodyXml = withMath.replace(/<w:pPr[\s>][\s\S]*?<\/w:pPr>/, '');
+    const runRegex = /<w:r[\s>][\s\S]*?<\/w:r>/g;
+    let rMatch: RegExpExecArray | null;
+    let out = '';
+    while ((rMatch = runRegex.exec(bodyXml)) !== null) {
+      const token = rMatch[0];
+      const rPrMatch = token.match(/<w:rPr[\s>][\s\S]*?<\/w:rPr>/);
+      const rPr = rPrMatch ? rPrMatch[0] : '';
+      const isSuperscript = /<w:vertAlign[^>]*w:val="superscript"/i.test(rPr);
+      const isSubscript = /<w:vertAlign[^>]*w:val="subscript"/i.test(rPr);
+      const normalizedRun = token
+        .replace(/<w:tab[^>]*\/>/g, '<w:t> </w:t>')
+        .replace(/<w:br[^>]*\/>/g, '<w:t> </w:t>');
+      const tMatches = normalizedRun.match(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g) || [];
+      let runText = tMatches.map((t) => t.replace(/<[^>]+>/g, '')).join('');
+      if (isSuperscript && runText.trim()) {
+        runText = `^{${runText.trim()}}`;
+      } else if (isSubscript && runText.trim()) {
+        runText = `_{${runText.trim()}}`;
+      }
+      out += runText;
+    }
+    return decodeXmlEntities(out).replace(/\s+/g, ' ').trim();
+  };
+
+  // Determine whether a 2D array of cell texts represents a Question Data Table ("Bảng/Biểu số liệu")
+  // rather than an exam header table, option layout grid (A. B. C. D.), Part II statement table (a) b) c) d)), or answer key table
+  const isQuestionDataTable = (rows: string[][]): boolean => {
+    if (rows.length < 2) return false;
+    const maxCols = Math.max(...rows.map((r) => r.filter(Boolean).length));
+    if (maxCols < 2) return false;
+    const allCells = rows.flat().map((c) => c.trim()).filter(Boolean);
+    if (allCells.length < 4) return false;
+
+    const fullTableText = allCells.join(' ');
+    if (
+      /SỞ\s+GIÁO\s+DỤC|PHÒNG\s+GD|TRƯỜNG\s+THPT|ĐỀ\s+KIỂM\s+TRA|ĐỀ\s+ÔN\s+LUYỆN|BẢNG\s+ĐÁP\s+ÁN|ĐÁP\s+ÁN\s+PHẦN|Mệnh\s+đề\s+Đúng\s+Sai|Phát\s+biểu\s+Đúng\s+Sai/i.test(
+        fullTableText
+      )
+    ) {
+      return false;
+    }
+
+    for (const cell of allCells) {
+      if (/^(?:Câu|Question)\s*\d*\b/i.test(cell)) return false;
+      if (/^(?:Đáp\s+án|Đ\/A|ĐA|Đáp\s+số|Lệnh\s+hỏi|Mức\s+độ|Mã\s+YCCĐ)\b/i.test(cell)) return false;
+      if (/^(?:PHẦN|Phần)\s+(?:I|II|III|1|2|3)\b/i.test(cell)) return false;
+      if (/^\*?(?:\[[A-D]\.?\]|[A-D][.)])\s+/.test(cell)) return false;
+      if (/^\*?[a-d][).]\s+/.test(cell)) return false;
+    }
+    return true;
+  };
+
+  const isAnswerKeyOrMatrixTable = (rows: string[][]): boolean => {
+    if (rows.length < 2) return false;
+    return rows.some(
+      (r) =>
+        r[0] &&
+        /^(?:Câu|Câu\s+hỏi|Đáp\s+án|Đ\/A|ĐA|Đáp\s+số|Kết\s+quả|Lệnh\s+hỏi|Ý\s*[a-d]\)|[a-d]\))\b/i.test(
+          r[0].trim()
+        )
+    );
+  };
+
+  // Strip <mc:Fallback> blocks first so Office AlternateContent never duplicates textboxes or floating tables
+  let preprocessedXml = xml.replace(/<mc:Fallback\b[^>]*>[\s\S]*?<\/mc:Fallback>/gi, '');
+
   // Replace drawing textboxes (<w:txbxContent> and <v:textbox>) with a drawing marker
-  // BEFORE matching <w:p> so nested <w:p> inside vector shapes never split outer paragraphs
-  // or inject stray axis labels ("4 km", "B", "N", "T", "Đ", "Hình 1...") into question text,
-  // while preserving any embedded raster <a:blip> or <v:imagedata> tags inside the textbox.
-  const sanitizedXml = xml
+  // BEFORE matching <w:p> so nested <w:p> inside vector shapes never split outer paragraphs,
+  // while preserving any embedded <w:tbl> data table or raster <a:blip> / <v:imagedata> tags inside the textbox.
+  preprocessedXml = preprocessedXml
     .replace(/<w:txbxContent\b[^>]*>([\s\S]*?)<\/w:txbxContent>/gi, (_m, inner: string) => {
+      const tables = (inner.match(/<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/gi) || []).join('');
       const blips = [
         ...(inner.match(/<a:blip\b[^>]*\/>/gi) || []),
         ...(inner.match(/<v:imagedata\b[^>]*\/>/gi) || []),
       ].join('');
-      return `<w:drawing>${blips}</w:drawing>`;
+      return `${tables}${blips ? `<w:drawing>${blips}</w:drawing>` : ''}`;
     })
     .replace(/<v:textbox\b[^>]*>([\s\S]*?)<\/v:textbox>/gi, (_m, inner: string) => {
+      const tables = (inner.match(/<w:tbl\b[^>]*>[\s\S]*?<\/w:tbl>/gi) || []).join('');
       const blips = [
         ...(inner.match(/<a:blip\b[^>]*\/>/gi) || []),
         ...(inner.match(/<v:imagedata\b[^>]*\/>/gi) || []),
       ].join('');
-      return `<v:shape>${blips}</v:shape>`;
+      return `${tables}${blips ? `<v:shape>${blips}</v:shape>` : ''}`;
     });
+
+  // Convert innermost <w:tbl> blocks that are Question Data Tables into synthetic <w:p> paragraphs with @@TABLE_START@@...@@TABLE_END@@
+  for (let pass = 0; pass < 2; pass++) {
+    preprocessedXml = preprocessedXml.replace(
+      /<w:tbl\b[^>]*>(?:(?!<w:tbl\b)[\s\S])*?<\/w:tbl>/gi,
+      (tblXml) => {
+        const trMatches = tblXml.match(/<w:tr[\s>][\s\S]*?<\/w:tr>/gi) || [];
+        const rows: string[][] = [];
+        for (const trXml of trMatches) {
+          const tcMatches = trXml.match(/<w:tc[\s>][\s\S]*?<\/w:tc>/gi) || [];
+          const rowCells: string[] = [];
+          for (const tcXml of tcMatches) {
+            const pMatches = tcXml.match(/<w:p[\s>][\s\S]*?<\/w:p>/gi) || [];
+            const cellText = pMatches
+              .map((p) => extractCellParagraphText(p))
+              .filter(Boolean)
+              .join(' ');
+            rowCells.push(cellText);
+          }
+          if (rowCells.some(Boolean)) {
+            rows.push(rowCells);
+          }
+        }
+
+        if (isQuestionDataTable(rows)) {
+          const encodedTable = `@@TABLE_START@@${rows
+            .map((r) => r.join('@@CELL@@'))
+            .join('@@ROW@@')}@@TABLE_END@@`;
+          const blips = [
+            ...(tblXml.match(/<a:blip\b[^>]*\/>/gi) || []),
+            ...(tblXml.match(/<v:imagedata\b[^>]*\/>/gi) || []),
+          ].join('');
+          return `<w:p><w:r><w:t>${encodedTable}</w:t></w:r>${blips}</w:p>`;
+        }
+        if (isAnswerKeyOrMatrixTable(rows)) {
+          return rows
+            .map((r) => `<w:p><w:r><w:t>${r.join('   ')}</w:t></w:r></w:p>`)
+            .join('');
+        }
+        return tblXml;
+      }
+    );
+  }
+
+  const sanitizedXml = preprocessedXml;
 
   const paragraphs: string[] = [];
   const pRegex = /<w:p[\s>][\s\S]*?<\/w:p>/g;
@@ -1814,10 +1935,10 @@ function parseWordDocumentXmlToAnnotatedText(
 
       if (isSuperscript && runText.trim()) {
         const cleanSup = runText.trim();
-        runText = cleanSup.length > 1 ? `^{${cleanSup}}` : `^${cleanSup}`;
+        runText = `^{${cleanSup}}`;
       } else if (isSubscript && runText.trim()) {
         const cleanSub = runText.trim();
-        runText = /\s/.test(cleanSub) ? `_{${cleanSub}}` : `_${cleanSub}`;
+        runText = `_{${cleanSub}}`;
       }
 
       const isRunMarked = hasUnderline || hasRedOrAccentColor || hasHighlight;
@@ -1826,6 +1947,17 @@ function parseWordDocumentXmlToAnnotatedText(
         runText = `@@RED_S@@${runText}@@RED_E@@`;
       }
       pText += runText;
+    }
+
+    if (pText.includes('@@TABLE_START@@')) {
+      const cleanTableLine = decodeXmlEntities(pText.replace(/@@RED_[SE]@@/g, '')).trim();
+      if (cleanTableLine) {
+        paragraphs.push(cleanTableLine);
+      }
+      for (const imgTok of imageTokens) {
+        paragraphs.push(imgTok);
+      }
+      continue;
     }
 
     // Merge adjacent @@RED_E@@@@RED_S@@ markers
@@ -1923,23 +2055,62 @@ function decodeXmlEntities(str: string): string {
 
 /**
  * Strip HTML tags from HTML-based .doc files while preserving line breaks, inline <img src="...">,
- * subscripts/superscripts, and underlined / red-colored ("bôi đỏ") correct answer markers.
+ * data tables, subscripts/superscripts, and underlined / red-colored ("bôi đỏ") correct answer markers.
  */
 function convertHtmlDocToAnnotatedText(html: string): string {
   let s = html;
   // Preserve inline <img src="..."> as @@IMAGE_TOKEN:...@@
   s = s.replace(/<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi, '\n@@IMAGE_TOKEN:$1@@\n');
 
-  // Preserve <sub>...</sub> and <sup>...</sup> as _ and ^ notation
+  // Preserve <sub>...</sub> and <sup>...</sup> as _{...} and ^{...} notation
   s = s.replace(/<sub\b[^>]*>([\s\S]*?)<\/sub>/gi, (_, inner) => {
     const clean = inner.replace(/<[^>]+>/g, '').trim();
     if (!clean) return '';
-    return /\s/.test(clean) ? `_{${clean}}` : `_${clean}`;
+    return `_{${clean}}`;
   });
   s = s.replace(/<sup\b[^>]*>([\s\S]*?)<\/sup>/gi, (_, inner) => {
     const clean = inner.replace(/<[^>]+>/g, '').trim();
     if (!clean) return '';
-    return clean.length > 1 ? `^{${clean}}` : `^${clean}`;
+    return `^{${clean}}`;
+  });
+
+  // Detect HTML <table>...</table> blocks that represent question data tables ("Bảng số liệu")
+  s = s.replace(/<table\b[^>]*>(?:(?!<table\b)[\s\S])*?<\/table>/gi, (tableHtml) => {
+    const trMatches = tableHtml.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi) || [];
+    const rows: string[][] = [];
+    for (const tr of trMatches) {
+      const cellMatches = tr.match(/<t[hd]\b[^>]*>([\s\S]*?)<\/t[hd]>/gi) || [];
+      const rowCells = cellMatches.map((c) =>
+        decodeXmlEntities(c.replace(/<[^>]+>/g, ' '))
+          .replace(/\s+/g, ' ')
+          .trim()
+      );
+      if (rowCells.some(Boolean)) {
+        rows.push(rowCells);
+      }
+    }
+    const maxCols = rows.length > 0 ? Math.max(...rows.map((r) => r.filter(Boolean).length)) : 0;
+    const allCells = rows.flat().filter(Boolean);
+    const fullText = allCells.join(' ');
+    const isDataTbl =
+      rows.length >= 2 &&
+      maxCols >= 2 &&
+      allCells.length >= 4 &&
+      !/SỞ\s+GIÁO\s+DỤC|TRƯỜNG\s+THPT|ĐỀ\s+KIỂM\s+TRA|ĐỀ\s+ÔN\s+LUYỆN|BẢNG\s+ĐÁP\s+ÁN/i.test(
+        fullText
+      ) &&
+      allCells.every(
+        (c) =>
+          !/^(?:Câu|Question)\s+\d+\b/i.test(c) &&
+          !/^(?:PHẦN|Phần)\s+(?:I|II|III|1|2|3)\b/i.test(c) &&
+          !/^\*?(?:\[[A-D]\.?\]|[A-D][.)])\s+/.test(c) &&
+          !/^\*?[a-d][).]\s+/.test(c)
+      );
+    if (isDataTbl) {
+      const encoded = rows.map((r) => r.join('@@CELL@@')).join('@@ROW@@');
+      return `\n@@TABLE_START@@${encoded}@@TABLE_END@@\n`;
+    }
+    return tableHtml;
   });
 
   // Mark any block/inline element with red/underline styling so options/statements inside it get *
@@ -1969,15 +2140,11 @@ function convertHtmlDocToAnnotatedText(html: string): string {
 
   return decodeXmlEntities(s)
     .split('\n')
-    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .map((line) => (line.includes('@@TABLE_START@@') ? line.trim() : line.replace(/\s+/g, ' ').trim()))
     .filter(Boolean)
     .join('\n');
 }
 
-/**
- * Resolve any image token or diagram cue in a question block into a concrete image_url
- * and strip standalone figure caption lines ("Hình 1. ...", "Hình 2. ...", "Hình 3. ...")
- */
 /**
  * Universal image resolver for any question across Part I, Part II, and Part III.
  * Guarantees that valid image data URIs, blob URLs, relative/remote paths, inline @@IMAGE_TOKEN:...@@,
@@ -2055,6 +2222,15 @@ export function getResolvedQuestionImage(
   if (mentionsHinh3) return THERMAL_EQUILIBRIUM_GRAPH_HINH3_SVG_DATA_URI;
   if (mentionsDisplacementTriangle) return DISPLACEMENT_TRIANGLE_SVG_DATA_URI;
   if (mentionsVelocityGraph) return VELOCITY_TIME_GRAPH_SVG_DATA_URI;
+
+  // Do NOT inject a synthetic calorimetry/mechanics fallback graph on questions that contain a Data Table
+  // ("Bảng số liệu") and lack an actual embedded image
+  const hasEmbeddedDataTable =
+    textContent.includes('@@TABLE_START@@') ||
+    /bảng\s+số\s+liệu|bảng\s+kết\s+quả|ghi\s+lại\s+bảng|Lần\s+đo\b/i.test(textContent);
+  if (hasEmbeddedDataTable) {
+    return undefined;
+  }
 
   const hasDiagramCue =
     Boolean(q.has_image) ||
@@ -2145,15 +2321,362 @@ function resolveQuestionImage(
 }
 
 /**
+ * Normalize a plain or mixed LaTeX text segment so that all mathematical and Physics formulas
+ * (such as p_1V_1 = p_2V_2, p_{1}V_{1} = p_{2}V_{2}, V_1/T_1 = V_2/T_2, p_0, cm^3, 10^{-2}, V_1 = V_0 + V_ống)
+ * are wrapped in valid LaTeX $...$ delimiters for KaTeX rendering.
+ */
+function normalizeMathSegmentForKatex(input: string): string {
+  if (!input) return '';
+
+  // 1. Normalize LaTeX \[...\], \(...\), and escaped \$...\$ into standard $$...$$ and $...$
+  let text = input
+    .replace(/\\\[([\s\S]+?)\\\]/g, '$$$$$1$$$$')
+    .replace(/\\\(([\s\S]+?)\\\)/g, '$$$1$$')
+    .replace(/\\\$([^\n$]+?)\\\$/g, '$$$1$$');
+
+  // 1b. Repair any previously fragmented adjacent inline $...$$...$ blocks (e.g. "$p_{1}$$V_{1} = p_{2}$$V_{2}$")
+  let prevMerged = '';
+  while (prevMerged !== text) {
+    prevMerged = text;
+    text = text.replace(/(?<!\$)\$([^$\n]+)\$\$([^$\n]+)\$(?!\$)/g, '$$$1$2$$');
+  }
+
+  // 2. Split by existing $$...$$, $...$, or @@IMAGE_TOKEN:...@@ so we never double-wrap existing LaTeX blocks
+  const existingTokenRegex = /(\$\$[\s\S]+?\$\$|\$(?:\\.|[^$\\])+\$|@@IMAGE_TOKEN:[\s\S]*?@@)/g;
+  const parts = text.split(existingTokenRegex);
+
+  const normalizedParts = parts.map((part) => {
+    if (!part) return part;
+    if (
+      (part.startsWith('$$') && part.endsWith('$$')) ||
+      (part.startsWith('$') && part.endsWith('$')) ||
+      part.startsWith('@@IMAGE_TOKEN:')
+    ) {
+      return part;
+    }
+
+    let s = part;
+
+    // 2a. Normalize Unicode superscripts and subscripts into explicit ^{...} / _{...}
+    s = s
+      .replace(/([a-zA-Z0-9)\]])²/g, '$1^{2}')
+      .replace(/([a-zA-Z0-9)\]])³/g, '$1^{3}')
+      .replace(/([a-zA-Z0-9)\]])⁻¹/g, '$1^{-1}')
+      .replace(/([a-zA-Z0-9)\]])⁻²/g, '$1^{-2}')
+      .replace(/([a-zA-Z0-9)\]])⁻³/g, '$1^{-3}')
+      .replace(/([a-zA-ZΔ])₀/g, '$1_{0}')
+      .replace(/([a-zA-ZΔ])₁/g, '$1_{1}')
+      .replace(/([a-zA-ZΔ])₂/g, '$1_{2}')
+      .replace(/([a-zA-ZΔ])₃/g, '$1_{3}')
+      .replace(/([a-zA-ZΔ])₄/g, '$1_{4}');
+
+    // 2b. Normalize unbraced subscripts/superscripts into braced _{...} and ^{...}
+    // Also normalize Unicode minus \u2212 inside exponents to ASCII '-' for KaTeX
+    s = s
+      .replace(/\^\{([^{}]*)\}/g, (_m, inner) => `^{${String(inner).replace(/−/g, '-')}}`)
+      .replace(
+        /([a-zA-Z0-9ΔθπρλμΩ)\]])_([0-9]+|[a-zA-ZÀ-ỹ]{1,12})(?![a-zA-Z0-9À-ỹ_{])/g,
+        (_m, base, sub) => {
+          const cleanSub = /^[0-9a-zA-Z]+$/.test(sub) ? sub : `\\text{${sub}}`;
+          return `${base}_{${cleanSub}}`;
+        }
+      )
+      .replace(
+        /_\{([^{}]+)\}/g,
+        (_m, sub) => {
+          if (/^\\text\{/.test(sub) || /^[0-9a-zA-Z+\-*/=(),.\s]+$/.test(sub)) {
+            return `_{${sub}}`;
+          }
+          return `_{\\text{${sub}}}`;
+        }
+      )
+      .replace(
+        /([a-zA-Z0-9ΔθπρλμΩ)\]])\^([+\-−]?[0-9]+|[a-zA-Z]{1,4})(?![a-zA-Z0-9À-ỹ^{])/g,
+        (_m, base, sup) => `${base}^{${String(sup).replace(/−/g, '-')}}`
+      );
+
+    // 2c. Convert common units with exponents (cm^{3}, m^{3}, cm^{2}, m^{2}, dm^{3}, mm^{3}, cm^{3}/K, m/s^{2}, kg/m^{3})
+    // when preceded by a number or space/paren so they render cleanly in KaTeX upright font
+    s = s.replace(
+      /(^|[\s(])((?:cm|mm|dm|km|m)\^\{[+\-]?\d+\}(?:\/(?:K|s|phút|giây|h))?|(?:kg|g)\/(?:m|cm|dm)\^\{[+\-]?\d+\}|m\/s\^\{[+\-]?\d+\})(?=$|[\s.,;:)!?\]])/g,
+      (_m, prefix, unitExpr) => {
+        const latexUnit = unitExpr.replace(
+          /\b(cm|mm|dm|km|kg|phút|giây|m|g|s|K|h)\b/g,
+          '\\text{$1}'
+        );
+        return `${prefix}$${latexUnit}$`;
+      }
+    );
+
+    // 2d. Wrap full equations/expressions containing _{...} or ^{...} (e.g. p_{1}V_{1} = p_{2}V_{2}, V_{1}/T_{1} = V_{2}/T_{2},
+    // p = p_{0} + mg/S = 10^{5} + (10 × 10)/10^{-2} = 1,1 × 10^{5}) in $...$
+    // Split again by any $...$ created in step 2c
+    const subParts = s.split(/(\$[^$]+\$)/g);
+    s = subParts
+      .map((sp) => {
+        if (!sp || (sp.startsWith('$') && sp.endsWith('$'))) return sp;
+
+        // Match mathematical chains that contain at least one _{...} or ^{...}
+        // Note: product term allows multiple adjacent subscripted/superscripted variables like p_{1}V_{1} or V_{1}T_{1}
+        const subSupVarSeq = `(?:[a-zA-Z0-9ΔθπρλμΩ]+(?:_\\{(?:\\\\text\\{[^{}]+\\}|[^{}])+\\}|\\^\\{[^{}]+\\})+)+`;
+        const mathAtom = `(?:\\([0-9a-zA-Z.,+\\-−*/×÷\\s_{}^\\\\]+\\)|(?:${subSupVarSeq}|\\d+(?:[.,]\\d+)?(?:\\^\\{[^{}]+\\})+)(?:\\s*[*/×÷]\\s*(?:${subSupVarSeq}|[a-zA-ZΔθπρλμΩ0-9.,()]+))*|[0-9]+(?:[.,][0-9]+)?|[a-zA-ZΔθπρλμΩ]{1,3}(?![a-zA-ZÀ-ỹ]))`;
+        const mathOp = `(?:\\s*(?:=|[+\\-−*/×÷]|⇒|⇔|->|→|≈|≤|≥|<|>)\\s*)`;
+        const chainRegex = new RegExp(`${mathAtom}(?:${mathOp}${mathAtom})+`, 'g');
+
+        let replaced = sp.replace(chainRegex, (matchStr) => {
+          if (!/[_^]\{/.test(matchStr)) {
+            return matchStr;
+          }
+          const latex = matchStr
+            .trim()
+            .replace(/×/g, ' \\times ')
+            .replace(/÷/g, ' \\div ')
+            .replace(/⇒/g, ' \\Rightarrow ')
+            .replace(/⇔/g, ' \\Leftrightarrow ')
+            .replace(/→|->/g, ' \\rightarrow ')
+            .replace(/≈/g, ' \\approx ')
+            .replace(/≤/g, ' \\le ')
+            .replace(/≥/g, ' \\ge ')
+            .replace(/−/g, '-')
+            .replace(/\s+/g, ' ');
+          return `$${latex}$`;
+        });
+
+        // Wrap any remaining standalone tokens or adjacent product tokens with _{...} or ^{...} (e.g. p_{0}, p_{1}V_{1}, p_{2}/p_{1}, 10^{-2}) outside $...$
+        const innerSplit = replaced.split(/(\$[^$]+\$)/g);
+        replaced = innerSplit
+          .map((isp) => {
+            if (!isp || (isp.startsWith('$') && isp.endsWith('$'))) return isp;
+            return isp.replace(
+              /(?:[a-zA-Z0-9ΔθπρλμΩ]+(?:_\{(?:\\text\{[^{}]+\}|[^{}])+\}|\^\{[^{}]+\})+)+(?:\/[a-zA-Z0-9ΔθπρλμΩ]+(?:_\{(?:\\text\{[^{}]+\}|[^{}])+\}|\^\{[^{}]+\})*)*/g,
+              (tok) => `$${tok.replace(/−/g, '-')}$`
+            );
+          })
+          .join('');
+
+        return replaced;
+      })
+      .join('');
+
+    return s;
+  });
+
+  let finalResult = normalizedParts.join('');
+  let prevFinal = '';
+  while (prevFinal !== finalResult) {
+    prevFinal = finalResult;
+    finalResult = finalResult.replace(/(?<!\$)\$([^$\n]+)\$\$([^$\n]+)\$(?!\$)/g, '$$$1$2$$');
+  }
+
+  return finalResult;
+}
+
+/**
+ * Normalize all mathematical and Physics formulas inside a text block (preserving @@TABLE_START@@...@@TABLE_END@@
+ * and normalizing each table cell individually) so KaTeX renders every formula accurately.
+ */
+export function normalizeMathFormulasForKatex(rawText: string): string {
+  if (!rawText) return '';
+  if (!rawText.includes('@@TABLE_START@@')) {
+    return normalizeMathSegmentForKatex(rawText);
+  }
+
+  return rawText.replace(
+    /@@TABLE_START@@([\s\S]*?)@@TABLE_END@@|((?:(?!@@TABLE_START@@)[\s\S])+)/g,
+    (fullMatch, tablePayload, outsideText) => {
+      if (tablePayload !== undefined) {
+        const normalizedRows = String(tablePayload)
+          .split('@@ROW@@')
+          .map((row) =>
+            row
+              .split('@@CELL@@')
+              .map((cell) => normalizeMathSegmentForKatex(cell.trim()))
+              .join('@@CELL@@')
+          )
+          .join('@@ROW@@');
+        return `@@TABLE_START@@${normalizedRows}@@TABLE_END@@`;
+      }
+      return outsideText ? normalizeMathSegmentForKatex(outsideText) : fullMatch;
+    }
+  );
+}
+
+/**
  * Strip all answer key markers (*, underline/red tags, (Đáp án đúng)) from displayed option text
  */
 function stripOptionMarkers(text: string): string {
-  return text
-    .replace(/^\*+|\*+$/g, '')
-    .replace(/\(\s*Đáp\s+án\s+đúng\s*\)/gi, '')
-    .replace(/\b(?:Đáp\s*án|ĐA)\s*:\s*[A-D]\b.*$/i, '')
-    .replace(/\s*\n\s*/g, ' ')
-    .trim();
+  return normalizeMathFormulasForKatex(
+    text
+      .replace(/^\*+|\*+$/g, '')
+      .replace(/\(\s*Đáp\s+án\s+đúng\s*\)/gi, '')
+      .replace(/\b(?:Đáp\s*án|ĐA)\s*:\s*[A-D]\b.*$/i, '')
+      .replace(/\s*\n\s*/g, ' ')
+      .trim()
+  );
+}
+
+/**
+ * Detect and encode inline data tables ("Bảng/Biểu số liệu") inside a question stem across Part I, Part II, and Part III.
+ * Supports:
+ * 1) Already tokenized @@TABLE_START@@...@@TABLE_END@@ blocks (from .docx <w:tbl> or .doc <table>)
+ * 2) Multi-line pipe-separated tables ("Lần đo | V (mL) | p (bar)\n1 | 80 | 1,00...")
+ * 3) Multi-line 3+ space or tab-aligned tables from PDF ("Lần đo   Nhiệt độ t (°C)   Thể tích V (cm³)\n1   27   30,0...")
+ * 4) Consecutive single-cell lines following a table cue ("như sau:", "bảng số liệu", "bảng sau")
+ */
+function normalizeQuestionStemTables(rawStem: string): string {
+  if (!rawStem) return '';
+  let text = rawStem.trim();
+
+  // If neither newlines nor table tokens are present, return trimmed stem
+  if (!text.includes('\n') && !text.includes('@@TABLE_START@@')) {
+    return text;
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const isNumericMeasurementCell = (s: string): boolean =>
+    /^[+-]?\d+(?:[.,]\d+)?(?:\s*(?:±|\+-)\s*\d+(?:[.,]\d+)?)?(?:\s*×\s*10\^\{?[+-]?\d+\}?)?$/.test(
+      s.trim()
+    );
+
+  // Pass A: Convert multi-line pipe tables (|) or multi-space/tab-aligned column rows into @@TABLE_START@@...@@TABLE_END@@
+  const passALines: string[] = [];
+  let idx = 0;
+  while (idx < lines.length) {
+    const line = lines[idx];
+    if (line.includes('@@TABLE_START@@')) {
+      passALines.push(line);
+      idx++;
+      continue;
+    }
+
+    // Check pipe-separated table row
+    if (line.includes('|')) {
+      const parsePipeRow = (l: string) =>
+        l
+          .split('|')
+          .map((c) => c.trim())
+          .filter((c, cIdx, arr) => !(c === '' && (cIdx === 0 || cIdx === arr.length - 1)));
+      const firstCells = parsePipeRow(line);
+      if (firstCells.length >= 2) {
+        const tableRows: string[][] = [];
+        let j = idx;
+        while (j < lines.length && lines[j].includes('|')) {
+          const cells = parsePipeRow(lines[j]);
+          if (cells.length >= 2) {
+            if (!cells.every((c) => /^[-:]+$/.test(c))) {
+              tableRows.push(cells);
+            }
+            j++;
+          } else {
+            break;
+          }
+        }
+        if (tableRows.length >= 2) {
+          const encoded = tableRows.map((r) => r.join('@@CELL@@')).join('@@ROW@@');
+          passALines.push(`@@TABLE_START@@${encoded}@@TABLE_END@@`);
+          idx = j;
+          continue;
+        }
+      }
+    }
+
+    // Check 3+ space or tab-aligned column row from PDF
+    const splitMultiSpaceRow = (l: string) =>
+      l
+        .split(/\s{3,}|\t+/)
+        .map((c) => c.trim())
+        .filter(Boolean);
+    const firstCols = splitMultiSpaceRow(line);
+    if (firstCols.length >= 2 && firstCols.every((c) => c.length <= 50)) {
+      const tableRows: string[][] = [firstCols];
+      let j = idx + 1;
+      while (j < lines.length && !lines[j].includes('@@TABLE_START@@')) {
+        const nextCols = splitMultiSpaceRow(lines[j]);
+        if (
+          nextCols.length >= 2 &&
+          Math.abs(nextCols.length - firstCols.length) <= 1 &&
+          nextCols.every((c) => c.length <= 50)
+        ) {
+          tableRows.push(nextCols);
+          j++;
+        } else {
+          break;
+        }
+      }
+      const hasNumericData = tableRows.some((r) => r.some((c) => isNumericMeasurementCell(c)));
+      if (tableRows.length >= 2 && hasNumericData) {
+        const encoded = tableRows.map((r) => r.join('@@CELL@@')).join('@@ROW@@');
+        passALines.push(`@@TABLE_START@@${encoded}@@TABLE_END@@`);
+        idx = j;
+        continue;
+      }
+    }
+
+    passALines.push(line);
+    idx++;
+  }
+
+  // Pass B: Check if trailing short lines after a table intro (e.g. "...như sau:") are 1-cell-per-line table entries
+  if (!passALines.some((l) => l.includes('@@TABLE_START@@')) && passALines.length >= 7) {
+    let introEndIdx = -1;
+    for (let i = 0; i < passALines.length; i++) {
+      if (/[:：]\s*$/.test(passALines[i]) || /bảng\s+số\s+liệu|bảng\s+sau|như\s+bảng/i.test(passALines[i])) {
+        introEndIdx = i;
+      }
+    }
+    if (introEndIdx >= 0 && passALines.length - (introEndIdx + 1) >= 6) {
+      const cellCandidates = passALines.slice(introEndIdx + 1);
+      if (cellCandidates.every((c) => c.length <= 45)) {
+        for (const colCount of [3, 4, 2, 5]) {
+          if (cellCandidates.length % colCount === 0) {
+            const rowCount = cellCandidates.length / colCount;
+            if (rowCount >= 2) {
+              const candidateRows: string[][] = [];
+              for (let r = 0; r < rowCount; r++) {
+                candidateRows.push(cellCandidates.slice(r * colCount, (r + 1) * colCount));
+              }
+              // Vertical table: row 0 is text headers, rows 1..R-1 are predominantly numbers
+              const headerHasLetters = candidateRows[0].filter((c) => /[a-zA-ZÀ-ỹ]/.test(c)).length >= 2;
+              const dataRowsNumeric = candidateRows
+                .slice(1)
+                .every((r) => r.filter((c) => isNumericMeasurementCell(c)).length >= Math.ceil(colCount / 2));
+              if (headerHasLetters && dataRowsNumeric) {
+                const encoded = candidateRows.map((r) => r.join('@@CELL@@')).join('@@ROW@@');
+                const beforeLines = passALines.slice(0, introEndIdx + 1);
+                passALines.length = 0;
+                passALines.push(...beforeLines, `@@TABLE_START@@${encoded}@@TABLE_END@@`);
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Join non-table lines with spaces while keeping @@TABLE_START@@...@@TABLE_END@@ on distinct lines
+  const finalSegments: string[] = [];
+  let textBuffer: string[] = [];
+  for (const l of passALines) {
+    if (l.includes('@@TABLE_START@@')) {
+      if (textBuffer.length > 0) {
+        finalSegments.push(textBuffer.join(' ').replace(/\s+/g, ' ').trim());
+        textBuffer = [];
+      }
+      finalSegments.push(l);
+    } else {
+      textBuffer.push(l);
+    }
+  }
+  if (textBuffer.length > 0) {
+    finalSegments.push(textBuffer.join(' ').replace(/\s+/g, ' ').trim());
+  }
+
+  return finalSegments.join('\n').trim();
 }
 
 /**
@@ -2382,7 +2905,7 @@ export function parseAnnotatedTextToExamData(
 
         const firstAIdx = normalizedStmtsBlock.search(/(?:^|\n)\s*\**a[).]\**\s+/);
         if (firstAIdx >= 0) {
-          const stem = normalizedStmtsBlock.slice(0, firstAIdx).trim();
+          const stem = normalizeQuestionStemTables(normalizedStmtsBlock.slice(0, firstAIdx));
           const stmtsRaw = normalizedStmtsBlock.slice(firstAIdx);
           const stmtRegex =
             /(?:^|\n)\s*(\**)([a-d])[).](\**)\s*([\s\S]*?)(?=(?:\n\s*\**[a-d][).]\**\s+)|$)/g;
@@ -2453,7 +2976,7 @@ export function parseAnnotatedTextToExamData(
                 }
                 return {
                   id: item.id,
-                  text: item.text,
+                  text: normalizeMathFormulasForKatex(item.text),
                   isTrue,
                   is_correct: isTrue,
                 };
@@ -2463,7 +2986,7 @@ export function parseAnnotatedTextToExamData(
             p2Questions.push({
               id: `UP-P2-${String(nextP2Idx).padStart(2, '0')}`,
               topic: detectedTopicLine || 'Vật lý — Đúng/Sai',
-              stem,
+              stem: normalizeMathFormulasForKatex(stem),
               statements: [finalStmts[0], finalStmts[1], finalStmts[2], finalStmts[3]],
               points: 1.0,
               explanation: `Đáp án chuẩn: ${finalStmts
@@ -2527,10 +3050,9 @@ export function parseAnnotatedTextToExamData(
         }
 
         if (firstOptIdx > 0) {
-          const questionStem = normalizedOptionsBlock
-            .slice(0, firstOptIdx)
-            .replace(/\s*\n\s*/g, ' ')
-            .trim();
+          const questionStem = normalizeMathFormulasForKatex(
+            normalizeQuestionStemTables(normalizedOptionsBlock.slice(0, firstOptIdx))
+          );
           // Inside the options region only, also split inline B., C., D. separated by single spaces
           const optsRegion = normalizedOptionsBlock
             .slice(firstOptIdx)
@@ -2636,11 +3158,13 @@ export function parseAnnotatedTextToExamData(
           qText = qText.replace(unitMatch[0], '').trim();
         }
 
-        qText = qText
-          .replace(/Điền\s+đáp\s+số\s*:\s*\.+.*$/im, '')
-          .replace(/(?:^|\n)\s*\*?(?:Đáp\s*số|Đáp\s*án|Kết\s*quả|ĐS|ĐA)\s*[:=].*$/im, '')
-          .replace(/\s*\n\s*/g, ' ')
-          .trim();
+        qText = normalizeMathFormulasForKatex(
+          normalizeQuestionStemTables(
+            qText
+              .replace(/Điền\s+đáp\s+số\s*:\s*\.+.*$/im, '')
+              .replace(/(?:^|\n)\s*\*?(?:Đáp\s*số|Đáp\s*án|Kết\s*quả|ĐS|ĐA)\s*[:=].*$/im, '')
+          )
+        );
 
         if (qText.length > 5) {
           const cleanNumeric = answerVal || '0';
@@ -3012,10 +3536,12 @@ export async function extractTextAndImagesFromPdfBuffer(
     }
   }
 
-  // Build global fallback font name -> CMap (e.g. /TT2 -> CMap)
+  // Build global fallback font name -> CMap (e.g. /TT2, /F1, /C0_0 -> CMap)
   const globalFontNameCMap = new Map<string, Map<number, string>>();
   for (const obj of objectsMap.values()) {
-    const fontDictMatches = obj.bodyText.matchAll(/\/(TT\d+|F\d+|C\d+|T\d+)\s+(\d+)\s+0\s+R/g);
+    const fontDictMatches = obj.bodyText.matchAll(
+      /\/(TT\d+(?:[._]\d+)?|F\d+(?:[._]\d+)?|C\d+(?:[._]\d+)?|T\d+(?:[._]\d+)?|f-\d+-\d+|G\d+|R\d+)\s+(\d+)\s+0\s+R/g
+    );
     for (const fm of fontDictMatches) {
       const fontName = fm[1];
       const fObjId = Number(fm[2]);
@@ -3061,10 +3587,12 @@ export async function extractTextAndImagesFromPdfBuffer(
     return null;
   };
 
-  // Global fallback XObject name -> object ID (e.g. /Im1 -> 12)
+  // Global fallback XObject name -> object ID (e.g. /Im1, /Image1, /I1 -> 12)
   const globalXObjectMap = new Map<string, number>();
   for (const obj of objectsMap.values()) {
-    const xobjMatches = obj.bodyText.matchAll(/\/(Im\d+|X\d+|Img\d+)\s+(\d+)\s+0\s+R/g);
+    const xobjMatches = obj.bodyText.matchAll(
+      /\/(Im\d+|Image\d+|Img\d+|I\d+|X\d+)\s+(\d+)\s+0\s+R/g
+    );
     for (const xm of xobjMatches) {
       globalXObjectMap.set(xm[1], Number(xm[2]));
     }
@@ -3248,13 +3776,17 @@ export async function extractTextAndImagesFromPdfBuffer(
       }
     }
 
-    const pageFontMatches = resourceTextToScan.matchAll(/\/(TT\d+|F\d+|C\d+|T\d+)\s+(\d+)\s+0\s+R/g);
+    const pageFontMatches = resourceTextToScan.matchAll(
+      /\/(TT\d+(?:[._]\d+)?|F\d+(?:[._]\d+)?|C\d+(?:[._]\d+)?|T\d+(?:[._]\d+)?|f-\d+-\d+|G\d+|R\d+)\s+(\d+)\s+0\s+R/g
+    );
     for (const fm of pageFontMatches) {
       const cmap = fontObjCMap.get(Number(fm[2]));
       if (cmap) pageFontCMap.set(fm[1], cmap);
     }
 
-    const pageXObjMatches = resourceTextToScan.matchAll(/\/(Im\d+|X\d+|Img\d+)\s+(\d+)\s+0\s+R/g);
+    const pageXObjMatches = resourceTextToScan.matchAll(
+      /\/(Im\d+|Image\d+|Img\d+|I\d+|X\d+)\s+(\d+)\s+0\s+R/g
+    );
     for (const xm of pageXObjMatches) {
       pageXObjectMap.set(xm[1], Number(xm[2]));
     }
@@ -3293,7 +3825,7 @@ export async function extractTextAndImagesFromPdfBuffer(
     const pageItems: PagePositionedItem[] = [];
     let currentFontName = 'TT2';
     let tfSize = 1;
-    let tmScale = 12;
+    let tmScale = 1;
     let tmX = 0;
     let tmY = 0;
     let lineLeading = 14;
@@ -3307,7 +3839,7 @@ export async function extractTextAndImagesFromPdfBuffer(
 
     // Tokenize the page content stream across newlines, keeping (...) literal strings and [...] TJ arrays intact
     const tokenRegex =
-      /\b(q|Q|BT|ET|T\*)\b|([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+(cm|Tm)\b|\/(TT\d+|F\d+|C\d+|T\d+)\s+([+-]?\d+(?:\.\d+)?)\s+Tf\b|([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+(Td|TD)\b|([+-]?\d+(?:\.\d+)?)\s+TL\b|\/(Im\d+|X\d+|Img\d+)\s+Do\b|(\[(?:(?:\((?:[^\\()]|\\.)*\))|<[0-9A-Fa-f\s]*>|[^\\\]]|\\.)*\]|\((?:[^\\()]|\\.)*\)|<[0-9A-Fa-f\s]+>)\s*(Tj|TJ)\b/g;
+      /\b(q|Q|BT|ET|T\*)\b|([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+(cm|Tm)\b|\/(TT\d+(?:[._]\d+)?|F\d+(?:[._]\d+)?|C\d+(?:[._]\d+)?|T\d+(?:[._]\d+)?|f-\d+-\d+|G\d+|R\d+)\s+([+-]?\d+(?:\.\d+)?)\s+Tf\b|([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+(Td|TD)\b|([+-]?\d+(?:\.\d+)?)\s+TL\b|\/(Im\d+|Image\d+|Img\d+|I\d+|X\d+)\s+Do\b|(\[(?:(?:\((?:[^\\()]|\\.)*\))|<[0-9A-Fa-f\s]*>|[^\\\]]|\\.)*\]|\((?:[^\\()]|\\.)*\)|<[0-9A-Fa-f\s]+>)\s*(Tj|TJ)\b/g;
 
     let tok: RegExpExecArray | null;
     while ((tok = tokenRegex.exec(combinedStreamText)) !== null) {
@@ -3332,10 +3864,16 @@ export async function extractTextAndImagesFromPdfBuffer(
         continue;
       }
       if (stateOp === 'T*') {
-        tmY -= lineLeading;
+        tmY -= lineLeading * tmScale;
         continue;
       }
-      if (stateOp === 'BT' || stateOp === 'ET') {
+      if (stateOp === 'BT') {
+        tmX = 0;
+        tmY = 0;
+        tmScale = 1;
+        continue;
+      }
+      if (stateOp === 'ET') {
         continue;
       }
 
@@ -3374,8 +3912,8 @@ export async function extractTextAndImagesFromPdfBuffer(
         if (tok[13] === 'TD') {
           lineLeading = -dy;
         }
-        tmX += dx;
-        tmY += dy;
+        tmX += dx * tmScale;
+        tmY += dy * tmScale;
         continue;
       }
 
@@ -3423,7 +3961,7 @@ export async function extractTextAndImagesFromPdfBuffer(
             y: pageY,
             x: pageX,
             fontSize: fontSizePt,
-            isScript: fontSizePt < 9.4,
+            isScript: fontSizePt < 9.6,
             text: decodedText,
           });
         }
@@ -3449,7 +3987,7 @@ export async function extractTextAndImagesFromPdfBuffer(
       }
 
       // Find an existing text line group within Y tolerance
-      const yTol = item.isScript ? 4.8 : 2.6;
+      const yTol = item.isScript ? 4.8 : 2.8;
       let targetGroup: VisualLineGroup | undefined;
       for (let gIdx = lineGroups.length - 1; gIdx >= 0; gIdx--) {
         const g = lineGroups[gIdx];
@@ -3485,32 +4023,36 @@ export async function extractTextAndImagesFromPdfBuffer(
       // Sort items left-to-right by X coordinate
       group.items.sort((a, b) => a.x - b.x);
 
+      const groupMaxFontSize = Math.max(...group.items.map((i) => i.fontSize), 10);
       let lineStr = '';
       let prevItem: PagePositionedItem | null = null;
 
       for (const it of group.items) {
         let piece = it.text;
+        const isRelativeScript =
+          it.fontSize < groupMaxFontSize * 0.86 || (it.isScript && groupMaxFontSize >= 10.2);
+
         // Format superscript / subscript runs when smaller font is offset vertically from baseY
-        if (it.isScript && Math.abs(it.y - group.baseY) >= 1.0 && piece.trim()) {
+        if (isRelativeScript && Math.abs(it.y - group.baseY) >= 0.9 && piece.trim()) {
           const cleanScript = piece.trim();
-          if (it.y > group.baseY + 1.0) {
-            piece = cleanScript.length > 1 ? `^{${cleanScript}}` : `^${cleanScript}`;
-          } else if (it.y < group.baseY - 1.0) {
-            piece = cleanScript.length > 1 ? `_{${cleanScript}}` : `_${cleanScript}`;
+          if (it.y > group.baseY + 0.9) {
+            piece = `^{${cleanScript}}`;
+          } else if (it.y < group.baseY - 0.9) {
+            piece = `_{${cleanScript}}`;
           }
         }
 
         if (prevItem) {
-          const estPrevWidth = prevItem.text.length * (prevItem.fontSize * 0.56);
+          const estPrevWidth = prevItem.text.length * (prevItem.fontSize * 0.45);
           const xGap = it.x - (prevItem.x + estPrevWidth);
-          if (xGap > 22) {
+          if (xGap > 18) {
             lineStr += '   ';
           } else if (
             xGap > 8.5 &&
             !lineStr.endsWith(' ') &&
             !piece.startsWith(' ') &&
-            !it.isScript &&
-            !prevItem.isScript
+            !isRelativeScript &&
+            !(prevItem.fontSize < groupMaxFontSize * 0.86)
           ) {
             lineStr += ' ';
           }
@@ -3572,14 +4114,28 @@ export function parseAndMergeDetailedSolutionDocument(
   const letterToIdx: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
   const idxToLetter: ('A' | 'B' | 'C' | 'D')[] = ['A', 'B', 'C', 'D'];
 
-  // Clean page headers/footers from solution text
+  // Clean page headers/footers from solution text (do not strip content after --- HẾT --- in case solutions follow)
+  // Also unpack any @@TABLE_START@@...@@TABLE_END@@ blocks inside solution documents into space-separated rows
+  // so Quick Answer Tables in .docx/.doc solution files are parsed reliably.
   const cleanedText = rawSolutionText
+    .replace(/@@TABLE_START@@([\s\S]*?)@@TABLE_END@@/g, (_m, tablePayload) => {
+      return String(tablePayload)
+        .split('@@ROW@@')
+        .map((r) =>
+          r
+            .split('@@CELL@@')
+            .map((c) => c.trim())
+            .filter(Boolean)
+            .join('   ')
+        )
+        .join('\n');
+    })
     .replace(/(?:^|\n)\s*Trang\s+\d+\s*\/\s*\d+\s*(?=\n|$)/gi, '\n')
     .replace(
       /(?:^|\n)\s*HƯỚNG\s+DẪN\s+CHẤM\s+VÀ\s+ĐÁP\s+ÁN\s+CHI\s+TIẾT[^\n]*(?=\n|$)/gi,
       '\n'
     )
-    .replace(/(?:^|\n)\s*---\s*HẾT\s*---[\s\S]*$/i, '')
+    .replace(/(?:^|\n)\s*-{2,}\s*HẾT\s*-{2,}\s*(?=\n|$)/gi, '\n')
     .trim();
 
   const lines = cleanedText
@@ -3587,7 +4143,7 @@ export function parseAndMergeDetailedSolutionDocument(
     .map((l) => l.trim())
     .filter(Boolean);
 
-  // 1. Parse Quick Answer Tables ("BẢNG ĐÁP ÁN NHANH") if present
+  // 1. Parse Quick Answer Tables ("BẢNG ĐÁP ÁN NHANH" or "BẢNG TỔNG HỢP ĐÁP ÁN & MA TRẬN") if present
   const quickPart1Answers: Record<number, 'A' | 'B' | 'C' | 'D'> = {};
   const quickPart2Answers: Record<number, Record<'a' | 'b' | 'c' | 'd', boolean>> = {};
   const quickPart3Answers: Record<number, string> = {};
@@ -3597,7 +4153,7 @@ export function parseAndMergeDetailedSolutionDocument(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Match Part I or Part III table header row: "Câu   1   2   3   4..."
+    // Match Part I or Part III horizontal table header row: "Câu   1   2   3   4..."
     if (/^Câu(?:\s+\d+){2,}/i.test(line) && i + 1 < lines.length) {
       const qNums = [...line.matchAll(/\b(\d{1,2})\b/g)].map((m) => Number(m[1]));
       const nextLine = lines[i + 1];
@@ -3618,6 +4174,83 @@ export function parseAndMergeDetailedSolutionDocument(
           continue;
         }
       }
+    }
+
+    // Match 1-cell-per-line vertical Quick Answer Table from legacy .docx parsing:
+    // "Câu", "1", "2", ..., "10", "Đáp án" (or "Đ/A"), "C", "A", "B", ...
+    if (/^Câu$/i.test(line) && i + 2 < lines.length && /^\d{1,2}$/.test(lines[i + 1])) {
+      const qNums: number[] = [];
+      let cursor = i + 1;
+      while (cursor < lines.length && /^\d{1,2}$/.test(lines[cursor])) {
+        qNums.push(Number(lines[cursor]));
+        cursor++;
+      }
+      if (
+        qNums.length >= 2 &&
+        cursor < lines.length &&
+        /^(?:Đ\/A|Đáp\s+án|ĐA)$/i.test(lines[cursor])
+      ) {
+        cursor++;
+        const ansTokens: string[] = [];
+        while (
+          cursor < lines.length &&
+          ansTokens.length < qNums.length &&
+          (/^[A-D]$/i.test(lines[cursor]) || /^[+-]?\d+(?:[.,]\d+)?$/.test(lines[cursor]))
+        ) {
+          ansTokens.push(lines[cursor]);
+          cursor++;
+        }
+        if (ansTokens.length === qNums.length) {
+          for (let k = 0; k < qNums.length; k++) {
+            const qn = qNums[k];
+            const tok = ansTokens[k].toUpperCase();
+            if (/^[A-D]$/.test(tok)) {
+              quickPart1Answers[qn] = tok as 'A' | 'B' | 'C' | 'D';
+            } else if (/^[+-]?\d+(?:[.,]\d+)?$/.test(ansTokens[k])) {
+              quickPart3Answers[qn] = ansTokens[k];
+            }
+          }
+          i = cursor - 1;
+          continue;
+        }
+      }
+    }
+
+    // Match vertical/columnar matrix rows from Word tables:
+    // e.g. line i = "1", line i+1 = "NB", line i+2 = "KN01", line i+3 = "D"
+    // or line i = "1", line i+1 = "D"
+    if (/^\d{1,2}$/.test(line)) {
+      const qn = Number(line);
+      if (qn >= 1 && qn <= 50) {
+        if (
+          i + 3 < lines.length &&
+          /^(?:NB|TH|VD|VDC|THK)\b/i.test(lines[i + 1]) &&
+          /^[A-D]$/i.test(lines[i + 3])
+        ) {
+          quickPart1Answers[qn] = lines[i + 3].toUpperCase() as 'A' | 'B' | 'C' | 'D';
+          i += 3;
+          continue;
+        }
+        if (
+          i + 2 < lines.length &&
+          /^(?:NB|TH|VD|VDC|THK)\b/i.test(lines[i + 1]) &&
+          /^[A-D]$/i.test(lines[i + 2])
+        ) {
+          quickPart1Answers[qn] = lines[i + 2].toUpperCase() as 'A' | 'B' | 'C' | 'D';
+          i += 2;
+          continue;
+        }
+      }
+    }
+
+    // Match single-line matrix row: "1   NB   KN01   D   Khái niệm..."
+    const matrixLineMatch = line.match(
+      /^(\d{1,2})\s+(?:NB|TH|VD|VDC|THK)\b(?:\s+\S+)?\s+([A-D])\b/i
+    );
+    if (matrixLineMatch) {
+      const qn = Number(matrixLineMatch[1]);
+      quickPart1Answers[qn] = matrixLineMatch[2].toUpperCase() as 'A' | 'B' | 'C' | 'D';
+      continue;
     }
 
     // Match Part II table header row: "Lệnh hỏi   Câu 19   Câu 20   Câu 21   Câu 22"
@@ -3653,7 +4286,7 @@ export function parseAndMergeDetailedSolutionDocument(
     }
 
     // Also support compact inline pairs like "1.B | 2.B | 3.A"
-    if (/BẢNG\s+ĐÁP\s+ÁN|ĐÁP\s+ÁN\s+PHẦN\s+I/i.test(line)) {
+    if (/BẢNG\s+ĐÁP\s+ÁN|ĐÁP\s+ÁN\s+PHẦN\s+I|BẢNG\s+TỔNG\s+HỢP\s+ĐÁP\s+ÁN/i.test(line)) {
       const inlinePairs = line.matchAll(/\b(\d{1,2})\s*[.:-]\s*([A-D])\b/gi);
       for (const m of inlinePairs) {
         quickPart1Answers[Number(m[1])] = m[2].toUpperCase() as 'A' | 'B' | 'C' | 'D';
@@ -3661,10 +4294,11 @@ export function parseAndMergeDetailedSolutionDocument(
     }
   }
 
-  // 2. Parse Detailed Question Blocks ("Câu 1: ...", "Câu 19: ...", "Câu 23: ...")
+  // 2. Parse Detailed Question Blocks:
+  // Supports "Câu 1: ...", "Câu 1. ...", "Câu 1 (NB - KN01): ...", "Câu 1 [TH]: ...", "**Câu 1:** ..."
   const detailedBlocksByNum: Record<number, string> = {};
   const taggedForBlocks = cleanedText.replace(
-    /(?:^|\n)\s*Câu\s+(\d{1,3})\s*[:.]\s*/gi,
+    /(?:^|\n)\s*\*?(?:Câu|Question)\s+(\d{1,3})\*?(?:\s*\([^)\n]{1,60}\)|\s*\[[^\]\n]{1,60}\])?\s*[:.-]\s*/gi,
     '\n@@SOL_Q_BLOCK:$1@@ '
   );
   const rawChunks = taggedForBlocks.split(/@@SOL_Q_BLOCK:(\d{1,3})@@/);
@@ -3675,13 +4309,34 @@ export function parseAndMergeDetailedSolutionDocument(
     body = body
       .replace(/(?:^|\n)\s*PHẦN\s+(?:I|II|III|1|2|3)\b[^\n]*$/gi, '')
       .replace(/(?:^|\n)\s*[123]\.\s*PHẦN\s+(?:I|II|III)\b[\s\S]*$/gi, '')
+      .replace(/(?:^|\n)\s*(?:I|II|III)\.\s*LỜI\s+GIẢI\s+CHI\s+TIẾT[^\n]*$/gi, '')
       .trim();
     if (body) {
-      detailedBlocksByNum[qNum] = body;
+      // Prefer longer block if question number appeared earlier in a brief summary
+      if (!detailedBlocksByNum[qNum] || body.length > detailedBlocksByNum[qNum].length) {
+        detailedBlocksByNum[qNum] = body;
+      }
     }
   }
 
   const matchedQuestions = new Set<string>();
+
+  // Helper to canonicalize formula/option strings for reliable equivalence comparison
+  const canonicalizeFormulaOrOption = (str: string): string =>
+    str
+      .replace(/\$+/g, '')
+      .replace(/\\text\{([^{}]*)\}/g, '$1')
+      .replace(/[{}]/g, '')
+      .replace(/\\times/g, 'x')
+      .replace(/×/g, 'x')
+      .replace(/−/g, '-')
+      .replace(/[.;,!?\s]+$/g, '')
+      .replace(/\s+/g, '')
+      .toLowerCase();
+
+  // Check if all Part 1 questions in baseExam defaulted to A (0) because the Quick Answer Table wasn't parsed previously
+  const allBasePart1DefaultA =
+    baseExam.part1.length > 3 && baseExam.part1.every((item) => item.correctIndex === 0);
 
   // 3. Synchronize Part I questions (Questions 1 .. p1Len)
   const updatedPart1: Part1Question[] = baseExam.part1.map((q, idx) => {
@@ -3690,21 +4345,74 @@ export function parseAndMergeDetailedSolutionDocument(
     let resolvedLetter: 'A' | 'B' | 'C' | 'D' | undefined = quickPart1Answers[globalNum];
 
     if (rawBlock) {
+      // Case A: Explicit "Chọn đáp án B" / "Đáp án: B" / "Chọn B"
       const headerAnsMatch = rawBlock.match(
-        /^(?:Chọn\s+đáp\s+án|Đáp\s+án(?:\s+đúng)?|ĐA)\s*[:=]?\s*([A-D])\b/i
+        /(?:^|\n|\s)(?:Chọn\s+(?:đáp\s+án|phương\s+án)?|Đáp\s+án(?:\s+đúng)?|ĐA)\s*[:=]?\s*([A-D])\b/i
       );
-      if (headerAnsMatch) {
+      if (headerAnsMatch && !resolvedLetter) {
         resolvedLetter = headerAnsMatch[1].toUpperCase() as 'A' | 'B' | 'C' | 'D';
+      }
+
+      // Case B: Option line tagged with "[ĐÁP ÁN ĐÚNG]" or "(ĐÁP ÁN ĐÚNG)" or leading "*A."
+      if (!resolvedLetter) {
+        const taggedOptionMatch = rawBlock.match(
+          /(?:^|\n)\s*\*?([A-D])[.)]\s+[^\n]*?(?:\[\s*ĐÁP\s+ÁN\s+ĐÚNG\s*\]|\(\s*ĐÁP\s+ÁN\s+ĐÚNG\s*\))/i
+        );
+        if (taggedOptionMatch) {
+          resolvedLetter = taggedOptionMatch[1].toUpperCase() as 'A' | 'B' | 'C' | 'D';
+        }
+      }
+      if (!resolvedLetter) {
+        const starredOptionMatch = rawBlock.match(/(?:^|\n)\s*\*([A-D])[.)]\s+/);
+        if (starredOptionMatch) {
+          resolvedLetter = starredOptionMatch[1].toUpperCase() as 'A' | 'B' | 'C' | 'D';
+        }
       }
     }
 
     let cleanExplanation = '';
     if (rawBlock) {
-      cleanExplanation = rawBlock
-        .replace(/^(?:Chọn\s+đáp\s+án|Đáp\s+án(?:\s+đúng)?|ĐA)\s*[:=]?\s*[A-D]\s*[.:]?\s*/i, '')
-        .replace(/^(?:Lời\s+giải(?:\s+chi\s+tiết)?|Hướng\s+dẫn\s+giải)\s*[:.-]?\s*/i, '')
-        .replace(/\s*\n\s*/g, ' ')
+      // Check if rawBlock has an explicit explanation marker like "=> Hướng dẫn giải chi tiết: ..." or "Lời giải chi tiết: ..."
+      const explicitGuideMatch = rawBlock.match(
+        /(?:=>|→|•|-)?\s*(?:Hướng\s+dẫn\s+giải(?:\s+chi\s+tiết)?|Lời\s+giải(?:\s+chi\s+tiết)?|Giải\s+thích(?:\s+chi\s+tiết)?)\s*[:.-]\s*([\s\S]*)$/i
+      );
+      if (explicitGuideMatch && explicitGuideMatch[1].trim()) {
+        cleanExplanation = explicitGuideMatch[1]
+          .replace(/\s*\n\s*/g, ' ')
+          .trim();
+      } else {
+        // Otherwise strip any leading "Chọn đáp án X." header and any repeated stem/options
+        cleanExplanation = rawBlock
+          .replace(/^(?:Chọn\s+(?:đáp\s+án|phương\s+án)?|Đáp\s+án(?:\s+đúng)?|ĐA)\s*[:=]?\s*[A-D]\s*[.:]?\s*/i, '')
+          .replace(/^(?:=>|→)?\s*(?:Lời\s+giải(?:\s+chi\s+tiết)?|Hướng\s+dẫn\s+giải(?:\s+chi\s+tiết)?|Giải\s+thích)\s*[:.-]?\s*/i, '')
+          .replace(/\s*\n\s*/g, ' ')
+          .trim();
+      }
+      cleanExplanation = cleanExplanation
+        .replace(
+          /^(?:Chọn\s+(?:đáp\s+án|phương\s+án)?|Đáp\s+án(?:\s+đúng|\s+là)?|ĐA)\s*[:=]?\s*[A-D]\b\s*[.:,-]?\s*/i,
+          ''
+        )
         .trim();
+    }
+
+    // Case C: If no Quick Answer Table entry was found (or if a previously saved summary had "Chọn đáp án A"
+    // from default fallback 0), check if the explanation concludes with an exact formula/value matching one of q.options
+    if (!quickPart1Answers[globalNum] && cleanExplanation && (!resolvedLetter || (resolvedLetter === 'A' && allBasePart1DefaultA))) {
+      const normOpts = q.options.map((opt) => canonicalizeFormulaOrOption(opt));
+      // Check conclusion patterns like "hay V_1/T_1 = V_2/T_2.", "⇒ p_2/p_1 = ... = 1,5.", "là 101 Pa."
+      const conclusionMatches = [
+        ...cleanExplanation.matchAll(/(?:hay|⇒|->|→|=|gọi\s+là|là)\s*([^.,;]+?)\s*[.!]?$/gi),
+      ];
+      if (conclusionMatches.length > 0) {
+        const tail = canonicalizeFormulaOrOption(conclusionMatches[conclusionMatches.length - 1][1]);
+        if (tail.length >= 2) {
+          const exactIdx = normOpts.findIndex((no) => no === tail);
+          if (exactIdx >= 0) {
+            resolvedLetter = idxToLetter[exactIdx];
+          }
+        }
+      }
     }
 
     const finalIdx =
@@ -3717,17 +4425,31 @@ export function parseAndMergeDetailedSolutionDocument(
       matchedQuestions.add(`P1-${globalNum}`);
     }
 
-    const finalExplanation = cleanExplanation
-      ? `Chọn đáp án ${finalLetter}. ${cleanExplanation}`
-      : resolvedLetter
-      ? `Đáp án đúng: ${finalLetter}.`
-      : q.explanation;
+    const fallbackCleanPrevExp = (q.explanation || '')
+      .replace(
+        /^(?:Chọn\s+(?:đáp\s+án|phương\s+án)?|Đáp\s+án(?:\s+đúng|\s+là)?|ĐA)\s*[:=]?\s*[A-D]\b\s*[.:,-]?\s*/i,
+        ''
+      )
+      .trim();
+
+    const rawFinalExplanation = cleanExplanation
+      ? cleanExplanation
+      : fallbackCleanPrevExp
+      ? fallbackCleanPrevExp
+      : `Đáp án đúng là ${finalLetter}.`;
 
     return {
       ...q,
+      question: normalizeMathFormulasForKatex(q.question),
+      options: [
+        normalizeMathFormulasForKatex(q.options[0]),
+        normalizeMathFormulasForKatex(q.options[1]),
+        normalizeMathFormulasForKatex(q.options[2]),
+        normalizeMathFormulasForKatex(q.options[3]),
+      ],
       correctIndex: finalIdx,
       correct_answer: finalLetter,
-      explanation: finalExplanation,
+      explanation: normalizeMathFormulasForKatex(rawFinalExplanation),
     };
   });
 
@@ -3775,7 +4497,7 @@ export function parseAndMergeDetailedSolutionDocument(
         }
         // Avoid matching the short header line "a) - Đúng, b) - Đúng..." as the body explanation
         if (rawExp && !/^[-\s]*(?:Đúng|Sai)\s*[,;]\s*[b-d]\)/i.test(rawExp)) {
-          explanationById[sId] = rawExp;
+          explanationById[sId] = normalizeMathFormulasForKatex(rawExp);
         }
       }
     }
@@ -3784,12 +4506,13 @@ export function parseAndMergeDetailedSolutionDocument(
     const updatedStatements = q.statements.map((stmt) => {
       const sId = stmt.id.toLowerCase() as 'a' | 'b' | 'c' | 'd';
       const newTruth = truthById[sId] !== undefined ? Boolean(truthById[sId]) : stmt.isTrue;
-      const newStmtExp = explanationById[sId] || stmt.explanation;
+      const newStmtExp = explanationById[sId] || (stmt.explanation ? normalizeMathFormulasForKatex(stmt.explanation) : undefined);
       if (truthById[sId] !== undefined || explanationById[sId]) {
         anyUpdated = true;
       }
       return {
         ...stmt,
+        text: normalizeMathFormulasForKatex(stmt.text),
         isTrue: newTruth,
         is_correct: newTruth,
         explanation: newStmtExp,
@@ -3816,10 +4539,11 @@ export function parseAndMergeDetailedSolutionDocument(
         ? `${summaryHeader}\n${detailedLines.join('\n')}`
         : anyUpdated
         ? summaryHeader
-        : q.explanation;
+        : normalizeMathFormulasForKatex(q.explanation || '');
 
     return {
       ...q,
+      stem: normalizeMathFormulasForKatex(q.stem),
       statements: updatedStatements,
       explanation: combinedExplanation,
     };
@@ -3835,9 +4559,9 @@ export function parseAndMergeDetailedSolutionDocument(
 
     if (rawBlock) {
       const ansMatch = rawBlock.match(
-        /^(?:Đáp\s+(?:án|số)|Kết\s+quả|ĐA|ĐS)\s*[:=]?\s*([+-]?\d+(?:[.,]\d+)?)\s*(?:\(\s*([^)]+)\s*\))?/i
+        /(?:^|\n|\s)(?:Đáp\s+(?:án|số)|Kết\s+quả|ĐA|ĐS)\s*[:=]?\s*([+-]?\d+(?:[.,]\d+)?)\s*(?:\(\s*([^)]+)\s*\))?/i
       );
-      if (ansMatch) {
+      if (ansMatch && !resolvedAnswer) {
         resolvedAnswer = ansMatch[1].trim();
         if (ansMatch[2]) {
           resolvedUnit = ansMatch[2].trim();
@@ -3847,29 +4571,54 @@ export function parseAndMergeDetailedSolutionDocument(
 
     let cleanExplanation = '';
     if (rawBlock) {
-      cleanExplanation = rawBlock
-        .replace(
-          /^(?:Đáp\s+(?:án|số)|Kết\s+quả|ĐA|ĐS)\s*[:=]?\s*[+-]?\d+(?:[.,]\d+)?\s*(?:\(\s*[^)]+\s*\))?\s*[.:]?\s*/i,
-          ''
-        )
-        .replace(/^(?:Lời\s+giải(?:\s+chi\s+tiết)?|Hướng\s+dẫn\s+giải)\s*[:.-]?\s*/i, '')
-        .replace(/\s*\n\s*/g, ' ')
-        .trim();
+      const explicitGuideMatch = rawBlock.match(
+        /(?:=>|→|•|-)?\s*(?:Hướng\s+dẫn\s+giải(?:\s+chi\s+tiết)?|Lời\s+giải(?:\s+chi\s+tiết)?|Giải\s+thích(?:\s+chi\s+tiết)?)\s*[:.-]\s*([\s\S]*)$/i
+      );
+      if (explicitGuideMatch && explicitGuideMatch[1].trim()) {
+        cleanExplanation = explicitGuideMatch[1]
+          .replace(/\s*\n\s*/g, ' ')
+          .trim();
+      } else {
+        cleanExplanation = rawBlock
+          .replace(
+            /^(?:Đáp\s+(?:án|số)|Kết\s+quả|ĐA|ĐS)\s*[:=]?\s*[+-]?\d+(?:[.,]\d+)?\s*(?:\(\s*[^)]+\s*\))?\s*[.:]?\s*/i,
+            ''
+          )
+          .replace(/^(?:=>|→)?\s*(?:Lời\s+giải(?:\s+chi\s+tiết)?|Hướng\s+dẫn\s+giải(?:\s+chi\s+tiết)?)\s*[:.-]?\s*/i, '')
+          .replace(/\s*\n\s*/g, ' ')
+          .trim();
+      }
+    }
+
+    // If resolvedAnswer is missing or '0' (default fallback when Quick Answer Table wasn't parsed),
+    // extract the final calculated numeric result at the end of cleanExplanation (e.g. "= 18 lít.", "≈ 0,39 g.", "= 27 °C.")
+    if ((!resolvedAnswer || resolvedAnswer === '0') && cleanExplanation) {
+      const finalCalcMatches = [
+        ...cleanExplanation.matchAll(/(?:=|≈|⇒|->|→|là)\s*([+\-−]?\d+(?:[.,]\d+)?)\s*(?:[a-zA-Z°À-ỹ%/^0-9{}_\\$\s]{0,20})?[.!]?\s*$/gi),
+      ];
+      if (finalCalcMatches.length > 0) {
+        const extractedNum = finalCalcMatches[finalCalcMatches.length - 1][1].replace(/−/g, '-').trim();
+        if (extractedNum) {
+          resolvedAnswer = extractedNum;
+        }
+      }
     }
 
     if (resolvedAnswer || cleanExplanation) {
       matchedQuestions.add(`P3-${globalNum}`);
     }
 
-    const finalAnswer = resolvedAnswer || q.answer;
-    const finalExplanation = cleanExplanation
-      ? `Đáp án: ${finalAnswer}${resolvedUnit ? ` (${resolvedUnit})` : ''}. ${cleanExplanation}`
+    const finalAnswer = resolvedAnswer && resolvedAnswer !== '0' ? resolvedAnswer : q.answer !== '0' ? q.answer : resolvedAnswer || q.answer;
+    const normalizedExpBody = normalizeMathFormulasForKatex(cleanExplanation);
+    const finalExplanation = normalizedExpBody
+      ? `Đáp án: ${finalAnswer}${resolvedUnit ? ` (${resolvedUnit})` : ''}. ${normalizedExpBody}`
       : resolvedAnswer
       ? `Đáp án: ${finalAnswer}${resolvedUnit ? ` (${resolvedUnit})` : ''}.`
-      : q.explanation;
+      : normalizeMathFormulasForKatex(q.explanation || '');
 
     return {
       ...q,
+      question: normalizeMathFormulasForKatex(q.question),
       answer: finalAnswer,
       correct_value: finalAnswer,
       unit: resolvedUnit,
@@ -3880,7 +4629,8 @@ export function parseAndMergeDetailedSolutionDocument(
   // Build a clean, human-readable formatted solution summary for the teacher preview & student review
   const summaryLines: string[] = [];
   updatedPart1.forEach((q, idx) => {
-    summaryLines.push(`Câu ${idx + 1}: ${q.explanation}`);
+    const letter = idxToLetter[q.correctIndex] || 'A';
+    summaryLines.push(`Câu ${idx + 1}: Chọn đáp án ${letter}. ${q.explanation}`);
   });
   updatedPart2.forEach((q, idx) => {
     summaryLines.push(`Câu ${p1Len + idx + 1}: ${q.explanation}`);
